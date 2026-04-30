@@ -372,9 +372,10 @@ def train(disease: str, sarsa_engine: SARSAEngine) -> dict:
         "rf_base":      rf_base,
         "features":     available,
         "base_features":base_features,
-        "metrics":      metrics,
+        "metrics":      metrics,   # ← stored here for registry recovery
         "has_sarsa":    has_sarsa,
         "fi":           fi.to_dict(orient="records"),
+        "trained_at":   datetime.datetime.now().isoformat(),
     }, MODELS_DIR/f"{disease}_rlrf.pkl")
 
     print(f"\n  ✓ Saved → models/{disease}_rlrf.pkl")
@@ -434,7 +435,46 @@ def predict_outbreak(disease: str, lga_features: dict) -> dict:
 # MODEL REGISTRY (publishable model card for thesis appendix)
 # ─────────────────────────────────────────────────────────────────────────────
 def save_registry(all_metrics: list[dict]):
+    # ── Merge with existing registry so single-disease runs don't wipe others ─
+    registry_path = MODELS_DIR / "model_registry.json"
+    existing_metrics = []
+    if registry_path.exists():
+        try:
+            with open(registry_path) as f:
+                existing = json.load(f)
+            existing_metrics = existing.get("diseases", [])
+        except Exception:
+            existing_metrics = []
+
+    # Also recover metrics from any .pkl file not in the current run
+    trained_in_run = {m["disease"] for m in all_metrics if "disease" in m}
+    for pkl in sorted(MODELS_DIR.glob("*_rlrf.pkl")):
+        dis = pkl.stem.replace("_rlrf", "")
+        if dis not in trained_in_run:
+            # Try to load metrics from the pkl itself
+            try:
+                art = joblib.load(pkl)
+                pkl_metrics = art.get("metrics", {})
+                if pkl_metrics and "r2" in pkl_metrics:
+                    all_metrics.append(pkl_metrics)
+                    print(f"  ↺ Recovered metrics for {dis} from pkl")
+                else:
+                    # Check existing registry
+                    for em in existing_metrics:
+                        if em.get("disease") == dis and "r2" in em:
+                            all_metrics.append(em)
+                            print(f"  ↺ Kept registry entry for {dis}")
+                            break
+            except Exception:
+                pass
+
     valid = [m for m in all_metrics if "r2" in m]
+    # Deduplicate — keep latest entry per disease
+    seen = {}
+    for m in valid:
+        seen[m["disease"]] = m
+    valid = list(seen.values())
+
     avg_r2  = np.mean([m["r2"] for m in valid]) if valid else 0
     avg_mae = np.mean([m["mae"] for m in valid]) if valid else 0
     avg_imp = np.mean([m["sarsa_improvement_r2"] for m in valid

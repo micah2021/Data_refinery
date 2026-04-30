@@ -1,7 +1,7 @@
 {
   "project": "Nigeria Health AI \u2014 RLRF Outbreak Prediction",
   "version": "2.0.0",
-  "created_at": "2026-04-30T00:19:57.774701",
+  "created_at": "2026-04-30T05:03:10.724914",
   "novel_contribution": "RLRF: Reinforcement Learning-guided Random Forest. N-step SARSA (n=1,2,4,8) value estimates used as state-aware temporal features in a zone-stratified RF+GB ensemble. First application of RL-feature augmentation to sub-national outbreak prediction in Africa.",
   "architecture": {
     "layer_1": "feature_store \u2014 multi-source state observations",
@@ -20,57 +20,407 @@
     "forecast_horizon": "4 weeks ahead"
   },
   "aggregate_performance": {
-    "mean_r2": 0.6168,
-    "mean_mae_per_10k": 0.4114,
-    "mean_sarsa_r2_gain": 0.1974
+    "mean_r2": 0.6034,
+    "mean_mae_per_10k": 0.4192,
+    "mean_sarsa_r2_gain": 0.1906
   },
   "diseases": [
     {
       "disease": "malaria",
-      "oob_score": 0.5271,
+      "oob_score": 0.5248,
       "train_rows": 25410,
       "test_rows": 11550,
       "features_total": 50,
       "features_sarsa": 7,
-      "mae": 0.4114,
-      "rmse": 0.5779,
-      "r2": 0.6168,
-      "mape_pct": 84663.26,
-      "outbreak_accuracy": 0.8511,
-      "uncertainty_mean": 0.3577,
-      "mae_no_sarsa": 0.5241,
-      "r2_no_sarsa": 0.4193,
-      "sarsa_improvement_r2": 0.1974,
-      "sarsa_improvement_mae": 0.1127,
+      "mae": 0.4127,
+      "rmse": 0.5817,
+      "r2": 0.6116,
+      "mape_pct": 84428.39,
+      "outbreak_accuracy": 0.8542,
+      "uncertainty_mean": 0.3606,
+      "mae_no_sarsa": 0.5256,
+      "r2_no_sarsa": 0.41,
+      "sarsa_improvement_r2": 0.2016,
+      "sarsa_improvement_mae": 0.1129,
       "zone_metrics": {
         "NC": {
-          "r2": 0.6964,
-          "mae": 0.2462,
+          "r2": 0.6704,
+          "mae": 0.25,
           "n": 1815
         },
         "NE": {
-          "r2": 0.597,
-          "mae": 0.4887,
+          "r2": 0.5823,
+          "mae": 0.4995,
           "n": 1665
         },
         "NW": {
-          "r2": 0.5825,
-          "mae": 0.4226,
+          "r2": 0.5759,
+          "mae": 0.4234,
           "n": 2760
         },
         "SE": {
-          "r2": 0.5604,
-          "mae": 0.5792,
+          "r2": 0.5643,
+          "mae": 0.5738,
           "n": 1425
         },
         "SS": {
-          "r2": 0.5236,
-          "mae": 0.439,
+          "r2": 0.5364,
+          "mae": 0.4346,
           "n": 1845
         },
         "SW": {
-          "r2": 0.5583,
-          "mae": 0.3377,
+          "r2": 0.5458,
+          "mae": 0.3397,
+          "n": 2040
+        }
+      }
+    },
+    {
+      "disease": "cholera",
+      "oob_score": 0.516,
+      "train_rows": 25410,
+      "test_rows": 11550,
+      "features_total": 50,
+      "features_sarsa": 7,
+      "mae": 0.4222,
+      "rmse": 0.588,
+      "r2": 0.6062,
+      "mape_pct": 104522.98,
+      "outbreak_accuracy": 0.8551,
+      "uncertainty_mean": 0.366,
+      "mae_no_sarsa": 0.5297,
+      "r2_no_sarsa": 0.4124,
+      "sarsa_improvement_r2": 0.1938,
+      "sarsa_improvement_mae": 0.1075,
+      "zone_metrics": {
+        "NC": {
+          "r2": 0.6332,
+          "mae": 0.2502,
+          "n": 1815
+        },
+        "NE": {
+          "r2": 0.5707,
+          "mae": 0.5159,
+          "n": 1665
+        },
+        "NW": {
+          "r2": 0.5878,
+          "mae": 0.4431,
+          "n": 2760
+        },
+        "SE": {
+          "r2": 0.556,
+          "mae": 0.5642,
+          "n": 1425
+        },
+        "SS": {
+          "r2": 0.5322,
+          "mae": 0.4522,
+          "n": 1845
+        },
+        "SW": {
+          "r2": 0.5474,
+          "mae": 0.3443,
+          "n": 2040
+        }
+      }
+    },
+    {
+      "disease": "typhoid",
+      "oob_score": 0.5193,
+      "train_rows": 25410,
+      "test_rows": 11550,
+      "features_total": 50,
+      "features_sarsa": 7,
+      "mae": 0.4194,
+      "rmse": 0.5916,
+      "r2": 0.596,
+      "mape_pct": 113606.9,
+      "outbreak_accuracy": 0.8485,
+      "uncertainty_mean": 0.3584,
+      "mae_no_sarsa": 0.5298,
+      "r2_no_sarsa": 0.4015,
+      "sarsa_improvement_r2": 0.1944,
+      "sarsa_improvement_mae": 0.1104,
+      "zone_metrics": {
+        "NC": {
+          "r2": 0.707,
+          "mae": 0.2412,
+          "n": 1815
+        },
+        "NE": {
+          "r2": 0.5501,
+          "mae": 0.5066,
+          "n": 1665
+        },
+        "NW": {
+          "r2": 0.5729,
+          "mae": 0.4364,
+          "n": 2760
+        },
+        "SE": {
+          "r2": 0.4991,
+          "mae": 0.5764,
+          "n": 1425
+        },
+        "SS": {
+          "r2": 0.5346,
+          "mae": 0.452,
+          "n": 1845
+        },
+        "SW": {
+          "r2": 0.5756,
+          "mae": 0.3443,
+          "n": 2040
+        }
+      }
+    },
+    {
+      "disease": "tuberculosis",
+      "oob_score": 0.5222,
+      "train_rows": 25410,
+      "test_rows": 11550,
+      "features_total": 50,
+      "features_sarsa": 7,
+      "mae": 0.4241,
+      "rmse": 0.6,
+      "r2": 0.5938,
+      "mape_pct": 94098.78,
+      "outbreak_accuracy": 0.8503,
+      "uncertainty_mean": 0.3593,
+      "mae_no_sarsa": 0.5314,
+      "r2_no_sarsa": 0.4076,
+      "sarsa_improvement_r2": 0.1862,
+      "sarsa_improvement_mae": 0.1072,
+      "zone_metrics": {
+        "NC": {
+          "r2": 0.6535,
+          "mae": 0.2538,
+          "n": 1815
+        },
+        "NE": {
+          "r2": 0.5681,
+          "mae": 0.5133,
+          "n": 1665
+        },
+        "NW": {
+          "r2": 0.5767,
+          "mae": 0.4448,
+          "n": 2760
+        },
+        "SE": {
+          "r2": 0.4823,
+          "mae": 0.5926,
+          "n": 1425
+        },
+        "SS": {
+          "r2": 0.5564,
+          "mae": 0.4359,
+          "n": 1845
+        },
+        "SW": {
+          "r2": 0.5303,
+          "mae": 0.3465,
+          "n": 2040
+        }
+      }
+    },
+    {
+      "disease": "meningitis",
+      "oob_score": 0.5237,
+      "train_rows": 25410,
+      "test_rows": 11550,
+      "features_total": 50,
+      "features_sarsa": 7,
+      "mae": 0.4173,
+      "rmse": 0.5965,
+      "r2": 0.6017,
+      "mape_pct": 103714.71,
+      "outbreak_accuracy": 0.8538,
+      "uncertainty_mean": 0.3575,
+      "mae_no_sarsa": 0.5248,
+      "r2_no_sarsa": 0.4192,
+      "sarsa_improvement_r2": 0.1825,
+      "sarsa_improvement_mae": 0.1075,
+      "zone_metrics": {
+        "NC": {
+          "r2": 0.6713,
+          "mae": 0.2454,
+          "n": 1815
+        },
+        "NE": {
+          "r2": 0.5552,
+          "mae": 0.5124,
+          "n": 1665
+        },
+        "NW": {
+          "r2": 0.5803,
+          "mae": 0.4379,
+          "n": 2760
+        },
+        "SE": {
+          "r2": 0.5214,
+          "mae": 0.5614,
+          "n": 1425
+        },
+        "SS": {
+          "r2": 0.5382,
+          "mae": 0.4449,
+          "n": 1845
+        },
+        "SW": {
+          "r2": 0.5716,
+          "mae": 0.3391,
+          "n": 2040
+        }
+      }
+    },
+    {
+      "disease": "lassa_fever",
+      "oob_score": 0.5239,
+      "train_rows": 25410,
+      "test_rows": 11550,
+      "features_total": 50,
+      "features_sarsa": 7,
+      "mae": 0.4141,
+      "rmse": 0.5818,
+      "r2": 0.6212,
+      "mape_pct": 75469.38,
+      "outbreak_accuracy": 0.8622,
+      "uncertainty_mean": 0.3615,
+      "mae_no_sarsa": 0.5244,
+      "r2_no_sarsa": 0.4283,
+      "sarsa_improvement_r2": 0.1929,
+      "sarsa_improvement_mae": 0.1103,
+      "zone_metrics": {
+        "NC": {
+          "r2": 0.6677,
+          "mae": 0.2413,
+          "n": 1815
+        },
+        "NE": {
+          "r2": 0.6149,
+          "mae": 0.4985,
+          "n": 1665
+        },
+        "NW": {
+          "r2": 0.6003,
+          "mae": 0.4356,
+          "n": 2760
+        },
+        "SE": {
+          "r2": 0.5262,
+          "mae": 0.5677,
+          "n": 1425
+        },
+        "SS": {
+          "r2": 0.5617,
+          "mae": 0.4361,
+          "n": 1845
+        },
+        "SW": {
+          "r2": 0.5791,
+          "mae": 0.3427,
+          "n": 2040
+        }
+      }
+    },
+    {
+      "disease": "diarrhoeal",
+      "oob_score": 0.5194,
+      "train_rows": 25410,
+      "test_rows": 11550,
+      "features_total": 50,
+      "features_sarsa": 7,
+      "mae": 0.425,
+      "rmse": 0.596,
+      "r2": 0.5941,
+      "mape_pct": 102042.52,
+      "outbreak_accuracy": 0.852,
+      "uncertainty_mean": 0.3592,
+      "mae_no_sarsa": 0.5293,
+      "r2_no_sarsa": 0.4108,
+      "sarsa_improvement_r2": 0.1833,
+      "sarsa_improvement_mae": 0.1043,
+      "zone_metrics": {
+        "NC": {
+          "r2": 0.6537,
+          "mae": 0.2368,
+          "n": 1815
+        },
+        "NE": {
+          "r2": 0.5272,
+          "mae": 0.5202,
+          "n": 1665
+        },
+        "NW": {
+          "r2": 0.5939,
+          "mae": 0.4347,
+          "n": 2760
+        },
+        "SE": {
+          "r2": 0.4948,
+          "mae": 0.5877,
+          "n": 1425
+        },
+        "SS": {
+          "r2": 0.5416,
+          "mae": 0.464,
+          "n": 1845
+        },
+        "SW": {
+          "r2": 0.5628,
+          "mae": 0.3526,
+          "n": 2040
+        }
+      }
+    },
+    {
+      "disease": "yellow_fever",
+      "oob_score": 0.5212,
+      "train_rows": 25410,
+      "test_rows": 11550,
+      "features_total": 50,
+      "features_sarsa": 7,
+      "mae": 0.4188,
+      "rmse": 0.5886,
+      "r2": 0.603,
+      "mape_pct": 99660.52,
+      "outbreak_accuracy": 0.8546,
+      "uncertainty_mean": 0.3582,
+      "mae_no_sarsa": 0.5265,
+      "r2_no_sarsa": 0.4132,
+      "sarsa_improvement_r2": 0.1898,
+      "sarsa_improvement_mae": 0.1078,
+      "zone_metrics": {
+        "NC": {
+          "r2": 0.6697,
+          "mae": 0.2496,
+          "n": 1815
+        },
+        "NE": {
+          "r2": 0.5594,
+          "mae": 0.5097,
+          "n": 1665
+        },
+        "NW": {
+          "r2": 0.5857,
+          "mae": 0.4417,
+          "n": 2760
+        },
+        "SE": {
+          "r2": 0.5426,
+          "mae": 0.5669,
+          "n": 1425
+        },
+        "SS": {
+          "r2": 0.5314,
+          "mae": 0.4456,
+          "n": 1845
+        },
+        "SW": {
+          "r2": 0.531,
+          "mae": 0.3362,
           "n": 2040
         }
       }

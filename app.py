@@ -297,7 +297,7 @@ elif page == "🔍 Data Explorer":
                           if selected_table == "feature_store"
                           else f"SELECT DISTINCT year as yr FROM {selected_table} ORDER BY 1"
                          )["yr"].dropna().astype(int).tolist()
-            if years:
+            if years and len(years) > 1:
                 yr_range = fcol3.select_slider(
                     "Year range",
                     options=years,
@@ -307,6 +307,12 @@ elif page == "🔍 Data Explorer":
                     year_filter = f"AND epi_year BETWEEN {yr_range[0]} AND {yr_range[1]}"
                 else:
                     year_filter = f"AND year BETWEEN {yr_range[0]} AND {yr_range[1]}"
+            elif years:
+                fcol3.info(f"Year: {years[0]}")
+                if selected_table == "feature_store":
+                    year_filter = f"AND epi_year = {years[0]}"
+                else:
+                    year_filter = f"AND year = {years[0]}"
 
     # Build query per table
     QUERIES = {
@@ -542,7 +548,6 @@ elif page == "🗺️ Disease Map":
             clim_df, x="rainfall_mm", y="incidence_rate",
             color="zone", color_discrete_map=ZONE_COLOURS,
             symbol="season", opacity=0.6,
-            trendline="ols",
             labels={
                 "rainfall_mm": "Monthly Rainfall (mm)",
                 "incidence_rate": "Incidence / 10k",
@@ -630,8 +635,7 @@ elif page == "👶 Maternal Health":
                     "anc_coverage_pct": "ANC Coverage (%)",
                     "skilled_birth_pct": "Skilled Birth (%)",
                 },
-                trendline="ols",
-            )
+                )
             fig2.update_layout(
                 height=340,
                 plot_bgcolor="rgba(0,0,0,0)",
@@ -723,10 +727,16 @@ elif page == "📊 Data Quality":
             WHERE lga_type IS NOT NULL
             GROUP BY lga_type
         """)
+        lga_type_melt = lga_type_df.melt(
+            id_vars="lga_type",
+            value_vars=["mean_weight", "mean_completeness"],
+            var_name="Metric", value_name="Score"
+        )
+        lga_type_melt["Score"] = lga_type_melt["Score"].astype(float)
         fig2 = px.bar(
-            lga_type_df, x="lga_type", y=["mean_weight", "mean_completeness"],
+            lga_type_melt, x="lga_type", y="Score", color="Metric",
             barmode="group",
-            labels={"lga_type": "LGA Type", "value": "Score", "variable": "Metric"},
+            labels={"lga_type": "LGA Type"},
             color_discrete_sequence=["#2196F3", "#4CAF50"],
         )
         fig2.update_layout(
@@ -995,7 +1005,7 @@ elif page == "🤖 Predictions":
     import json as _json
 
     models_dir = _Path("models")
-    trained = [f.stem.replace("_rlrf","") for f in models_dir.glob("*_rlrf.pkl")] if models_dir.exists() else []
+    trained = sorted([f.stem.replace("_rlrf","") for f in models_dir.glob("*_rlrf.pkl")]) if models_dir.exists() else []
     registry_path = models_dir / "model_registry.json"
 
     if not trained:
@@ -1008,72 +1018,93 @@ elif page == "🤖 Predictions":
 
     # ── Model performance cards ───────────────────────────────────────────
     st.subheader("📊 Model Performance Summary")
+
+    # Load registry; patch in any missing diseases so all 8 show up
+    registry = {}
     if registry_path.exists():
         with open(registry_path) as f:
             registry = _json.load(f)
 
-        perf_data = [
-            d for d in registry.get("diseases", [])
-            if "r2" in d
-        ]
-        if perf_data:
-            cols = st.columns(min(len(perf_data), 4))
-            for i, m in enumerate(perf_data[:4]):
-                with cols[i % 4]:
+    registered_diseases = {d["disease"] for d in registry.get("diseases", []) if "disease" in d}
+    patched = False
+    for dis in trained:
+        if dis not in registered_diseases:
+            registry.setdefault("diseases", []).append({
+                "disease": dis,
+                "r2": 0.0,
+                "r2_no_sarsa": 0.0,
+                "sarsa_improvement_r2": 0.0,
+            })
+            patched = True
+    if patched:
+        st.info(
+            "ℹ️ Some models are trained but missing from model_registry.json. "
+            "Showing all diseases. Re-run `python train_model.py` to populate full metrics.",
+            icon="ℹ️",
+        )
+
+    perf_data = [
+        d for d in registry.get("diseases", [])
+        if "r2" in d
+    ]
+    if perf_data:
+        cols = st.columns(min(len(perf_data), 4))
+        for i, m in enumerate(perf_data[:4]):
+            with cols[i % 4]:
+                delta = f"+{m.get('sarsa_improvement_r2',0):.4f} vs RF-only"
+                st.metric(
+                    label=m["disease"].replace("_"," ").title(),
+                    value=f"R² {m.get('r2',0):.4f}",
+                    delta=delta,
+                )
+        if len(perf_data) > 4:
+            cols2 = st.columns(min(len(perf_data)-4, 4))
+            for i, m in enumerate(perf_data[4:]):
+                with cols2[i % 4]:
                     delta = f"+{m.get('sarsa_improvement_r2',0):.4f} vs RF-only"
                     st.metric(
                         label=m["disease"].replace("_"," ").title(),
                         value=f"R² {m.get('r2',0):.4f}",
                         delta=delta,
                     )
-            if len(perf_data) > 4:
-                cols2 = st.columns(min(len(perf_data)-4, 4))
-                for i, m in enumerate(perf_data[4:]):
-                    with cols2[i % 4]:
-                        delta = f"+{m.get('sarsa_improvement_r2',0):.4f} vs RF-only"
-                        st.metric(
-                            label=m["disease"].replace("_"," ").title(),
-                            value=f"R² {m.get('r2',0):.4f}",
-                            delta=delta,
-                        )
 
-            # Ablation chart — RLRF vs RF
-            import plotly.graph_objects as _go
-            st.subheader("RLRF vs RF-only (Ablation Study — your Table 3)")
-            ab_df = pd.DataFrame([
-                {
-                    "Disease": d["disease"].replace("_"," ").title(),
-                    "RLRF (R²)": d.get("r2", 0),
-                    "RF-only (R²)": d.get("r2_no_sarsa", 0),
-                }
-                for d in perf_data
-            ])
-            fig_ab = _go.Figure()
-            fig_ab.add_bar(
-                name="RLRF (N-Step SARSA + RF)",
-                x=ab_df["Disease"],
-                y=ab_df["RLRF (R²)"],
-                marker_color="#1E88E5",
-                text=ab_df["RLRF (R²)"].round(4),
-                textposition="outside",
-            )
-            fig_ab.add_bar(
-                name="RF-only (no SARSA)",
-                x=ab_df["Disease"],
-                y=ab_df["RF-only (R²)"],
-                marker_color="#E53935",
-                text=ab_df["RF-only (R²)"].round(4),
-                textposition="outside",
-            )
-            fig_ab.update_layout(
-                barmode="group",
-                height=380,
-                yaxis=dict(title="R² Score", range=[0, 0.80]),
-                plot_bgcolor="rgba(0,0,0,0)",
-                paper_bgcolor="rgba(0,0,0,0)",
-                legend=dict(orientation="h", y=1.1),
-            )
-            st.plotly_chart(fig_ab, use_container_width=True)
+        # Ablation chart — RLRF vs RF
+        import plotly.graph_objects as _go
+        st.subheader("RLRF vs RF-only (Ablation Study — your Table 3)")
+        ab_df = pd.DataFrame([
+            {
+                "Disease": d["disease"].replace("_"," ").title(),
+                "RLRF (R²)": d.get("r2", 0),
+                "RF-only (R²)": d.get("r2_no_sarsa", 0),
+            }
+            for d in perf_data
+        ])
+        fig_ab = _go.Figure()
+        fig_ab.add_bar(
+            name="RLRF (N-Step SARSA + RF)",
+            x=ab_df["Disease"],
+            y=ab_df["RLRF (R²)"],
+            marker_color="#1E88E5",
+            text=ab_df["RLRF (R²)"].round(4),
+            textposition="outside",
+        )
+        fig_ab.add_bar(
+            name="RF-only (no SARSA)",
+            x=ab_df["Disease"],
+            y=ab_df["RF-only (R²)"],
+            marker_color="#E53935",
+            text=ab_df["RF-only (R²)"].round(4),
+            textposition="outside",
+        )
+        fig_ab.update_layout(
+            barmode="group",
+            height=380,
+            yaxis=dict(title="R² Score", range=[0, 0.80]),
+            plot_bgcolor="rgba(0,0,0,0)",
+            paper_bgcolor="rgba(0,0,0,0)",
+            legend=dict(orientation="h", y=1.1),
+        )
+        st.plotly_chart(fig_ab, use_container_width=True)
 
     st.divider()
 
