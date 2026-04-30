@@ -1,0 +1,86 @@
+{
+  "project": "Nigeria Health AI \u2014 RLRF Outbreak Prediction",
+  "version": "2.0.0",
+  "created_at": "2026-04-30T00:19:57.774701",
+  "novel_contribution": "RLRF: Reinforcement Learning-guided Random Forest. N-step SARSA (n=1,2,4,8) value estimates used as state-aware temporal features in a zone-stratified RF+GB ensemble. First application of RL-feature augmentation to sub-national outbreak prediction in Africa.",
+  "architecture": {
+    "layer_1": "feature_store \u2014 multi-source state observations",
+    "layer_2": "N-Step SARSA engine \u2014 V(S), Q(S,A), A(S,a)",
+    "layer_3": "Random Forest n=300 + GB residual corrector",
+    "layer_4": "Zone-stratified evaluation with bias correction",
+    "discount_gamma": 0.92,
+    "learning_rate_alpha": 0.08,
+    "eligibility_lambda": 0.75,
+    "n_steps": [
+      1,
+      2,
+      4,
+      8
+    ],
+    "forecast_horizon": "4 weeks ahead"
+  },
+  "aggregate_performance": {
+    "mean_r2": 0.6168,
+    "mean_mae_per_10k": 0.4114,
+    "mean_sarsa_r2_gain": 0.1974
+  },
+  "diseases": [
+    {
+      "disease": "malaria",
+      "oob_score": 0.5271,
+      "train_rows": 25410,
+      "test_rows": 11550,
+      "features_total": 50,
+      "features_sarsa": 7,
+      "mae": 0.4114,
+      "rmse": 0.5779,
+      "r2": 0.6168,
+      "mape_pct": 84663.26,
+      "outbreak_accuracy": 0.8511,
+      "uncertainty_mean": 0.3577,
+      "mae_no_sarsa": 0.5241,
+      "r2_no_sarsa": 0.4193,
+      "sarsa_improvement_r2": 0.1974,
+      "sarsa_improvement_mae": 0.1127,
+      "zone_metrics": {
+        "NC": {
+          "r2": 0.6964,
+          "mae": 0.2462,
+          "n": 1815
+        },
+        "NE": {
+          "r2": 0.597,
+          "mae": 0.4887,
+          "n": 1665
+        },
+        "NW": {
+          "r2": 0.5825,
+          "mae": 0.4226,
+          "n": 2760
+        },
+        "SE": {
+          "r2": 0.5604,
+          "mae": 0.5792,
+          "n": 1425
+        },
+        "SS": {
+          "r2": 0.5236,
+          "mae": 0.439,
+          "n": 1845
+        },
+        "SW": {
+          "r2": 0.5583,
+          "mae": 0.3377,
+          "n": 2040
+        }
+      }
+    }
+  ],
+  "ethical_notes": [
+    "Trained exclusively on Nigerian epidemiological data",
+    "No Western benchmarks used",
+    "Rural reporting bias corrected via sample weights",
+    "Synthetic baseline \u2014 replace with live DHIS2/NCDC data",
+    "LGA-level predictions only \u2014 not individual risk"
+  ]
+}

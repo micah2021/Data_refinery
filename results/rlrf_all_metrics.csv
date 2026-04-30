@@ -1,0 +1,2 @@
+disease,oob_score,train_rows,test_rows,features_total,features_sarsa,mae,rmse,r2,mape_pct,outbreak_accuracy,uncertainty_mean,mae_no_sarsa,r2_no_sarsa,sarsa_improvement_r2,sarsa_improvement_mae
+malaria,0.5271,25410,11550,50,7,0.4114,0.5779,0.6168,84663.26,0.8511,0.3577,0.5241,0.4193,0.1974,0.1127
