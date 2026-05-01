@@ -29,42 +29,7 @@ import streamlit as st
 # ── Config ──────────────────────────────────────────────────────────────────
 DB_PATH = os.getenv("DB_PATH", "./nigeria.db")
 
-# ── Auto-build database on first run (Streamlit Cloud) ──────────────────────
-def _ensure_db():
-    """Build nigeria.db from scratch on first run using synthetic data."""
-    from pathlib import Path as _P
-    db = _P(DB_PATH)
-    # Already ready?
-    if db.exists() and db.stat().st_size > 1_000_000:
-        try:
-            import sqlite3 as _sq
-            c = _sq.connect(DB_PATH)
-            n = c.execute("SELECT COUNT(*) FROM lga").fetchone()[0]
-            c.close()
-            if n > 100:
-                return  # DB is good
-        except Exception:
-            pass
-
-    if st.session_state.get("_db_building"):
-        st.info("⏳ Building database... please wait")
-        st.stop()
-        return
-
-    st.session_state["_db_building"] = True
-    with st.spinner("⏳ First run: building Nigeria health database (~2 minutes)..."):
-        try:
-            import startup
-            startup.run_setup()
-            st.session_state["_db_building"] = False
-            st.success("✅ Database ready! Loading dashboard...")
-            import time; time.sleep(1)
-            st.rerun()
-        except Exception as e:
-            st.session_state["_db_building"] = False
-            st.warning(f"⚠️ Database setup issue: {e}. Some data may be unavailable.")
-
-
+# ── st.set_page_config must be first Streamlit call ─────────────────────────
 st.set_page_config(
     page_title="Nigeria Health AI Refinery",
     page_icon="🇳🇬",
@@ -83,6 +48,105 @@ DISEASE_COLOURS = {
     "meningitis": "#FB8C00", "lassa_fever": "#D81B60",
     "diarrhoeal": "#43A047", "yellow_fever": "#F4511E",
 }
+
+# ── Auto-build database on first run (Streamlit Cloud) ──────────────────────
+def _build_db_if_needed():
+    """Synchronously build nigeria.db before any queries run."""
+    db = Path(DB_PATH)
+    # Check if DB exists and has data
+    if db.exists() and db.stat().st_size > 500_000:
+        try:
+            c = sqlite3.connect(DB_PATH)
+            n = c.execute("SELECT COUNT(*) FROM lga").fetchone()[0]
+            c.close()
+            if n > 100:
+                return True  # DB is ready
+        except Exception:
+            pass
+
+    # Need to build — show progress UI
+    placeholder = st.empty()
+    with placeholder.container():
+        st.warning("⏳ **First run detected** — building Nigeria health database from synthetic data. This takes about 2 minutes...")
+        progress = st.progress(0, text="Initialising...")
+
+    try:
+        import sys, importlib
+        sys.path.insert(0, ".")
+
+        # Step 1: Schema
+        progress.progress(10, text="Creating database schema...")
+        import setup_db
+        importlib.reload(setup_db)
+
+        import sqlite3 as _sq, os as _os
+        if _os.path.exists(DB_PATH):
+            _os.remove(DB_PATH)
+        with open("nigeria_db_schema.sql", "r", encoding="utf-8") as f:
+            schema_sql = f.read()
+        _conn = _sq.connect(DB_PATH)
+        _conn.executescript(schema_sql)
+        _conn.commit()
+        _conn.close()
+
+        # Step 2: Seed LGAs
+        progress.progress(25, text="Seeding 770 Nigerian LGAs...")
+        import seed_nigeria
+        importlib.reload(seed_nigeria)
+        seed_nigeria.seed_lga_table(DB_PATH)
+
+        # Step 3: Load LGAs for CSV generation
+        _conn = _sq.connect(DB_PATH)
+        _conn.row_factory = _sq.Row
+        lgas = [dict(r) for r in _conn.execute(
+            "SELECT lga_id, lga_name, state, zone, lga_type FROM lga"
+        ).fetchall()]
+        _conn.close()
+
+        # Step 4: Generate CSVs
+        progress.progress(40, text="Generating climate and alert data...")
+        import os as _os2
+        _os2.makedirs("./data", exist_ok=True)
+        seed_nigeria.generate_ncdc_csv("./data/ncdc_alerts.csv", lgas)
+        seed_nigeria.generate_nimet_csv("./data/nimet_climate.csv", lgas)
+
+        # Step 5: Seed disease records
+        progress.progress(55, text="Generating disease records...")
+        import random
+        random.seed(42)
+        sample = random.sample(lgas, min(150, len(lgas)))
+        seed_nigeria.seed_disease_records(DB_PATH, sample)
+
+        # Step 6: Run data collector
+        progress.progress(70, text="Running data collector...")
+        try:
+            import data_collector
+            importlib.reload(data_collector)
+            data_collector.main()
+        except Exception as e:
+            st.warning(f"Data collector partial: {e}")
+
+        # Step 7: Build feature store
+        progress.progress(85, text="Building feature store...")
+        try:
+            import build_feature_store
+            importlib.reload(build_feature_store)
+            build_feature_store.main()
+        except Exception as e:
+            st.warning(f"Feature store partial: {e}")
+
+        progress.progress(100, text="✅ Database ready!")
+        placeholder.success("✅ Database built successfully! Loading dashboard...")
+        import time; time.sleep(2)
+        st.rerun()
+        return True
+
+    except Exception as e:
+        placeholder.error(f"❌ Database build failed: {e}")
+        st.stop()
+        return False
+
+_build_db_if_needed()
 
 # ── DB helpers ────────────────────────────────────────────────────────────────
 @contextmanager
