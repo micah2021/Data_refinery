@@ -8,8 +8,16 @@ from typing import List, Dict, Tuple, Optional
 from dataclasses import dataclass, field
 import time
 
-from core.environment import PDEnvironment, PDConfig, VARIANTS, Action
-from core.agent import NStepSARSA, AgentConfig, RandomAgent, TitForTatAgent, AlwaysDefectAgent
+from agent import NStepSARSA, AgentConfig, RandomAgent, TitForTatAgent, AlwaysDefectAgent
+
+# Stub environment classes (not used in health AI context)
+class Action:
+    def __init__(self, v): self.value = v
+VARIANTS = {}
+class PDEnvironment:
+    pass
+class PDConfig:
+    pass
 
 
 @dataclass
@@ -119,7 +127,7 @@ def run_experiment(cfg: ExperimentConfig) -> ExperimentResult:
             ab1 = agent_b.choose_action(sb1)
 
             # Store transitions
-            from core.agent import Transition
+            from agent import Transition
             agent_a.store_transition(Transition(sa, aa, ra, sa1, aa1))
             agent_b.store_transition(Transition(sb, ab, rb, sb1, ab1))
 
@@ -251,7 +259,7 @@ def run_vs_baseline(sarsa_n: int = 2,
                 aa1 = sarsa.choose_action(sa1)
                 ab1 = baseline.choose_action(sb1)
 
-                from core.agent import Transition
+                from agent import Transition
                 sarsa.store_transition(Transition(sa, aa, ra, sa1, aa1))
                 sarsa.update()
                 sarsa.record_step(aa, ra)

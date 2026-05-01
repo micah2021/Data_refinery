@@ -176,5 +176,38 @@ def _seed_socioeconomic_direct(lgas):
     print(f"  {n:,} socioeconomic rows inserted")
 
 
+def train_models_if_needed():
+    """Train RLRF models if pkl files are missing."""
+    import importlib, sys
+    sys.path.insert(0, ".")
+    from pathlib import Path as _P
+    models_dir = _P("./models")
+    models_dir.mkdir(exist_ok=True)
+
+    DISEASES = ["malaria","cholera","typhoid","tuberculosis",
+                "meningitis","lassa_fever","yellow_fever","diarrhoeal"]
+
+    missing = [d for d in DISEASES
+               if not (models_dir / f"{d}_rlrf.pkl").exists()]
+
+    if not missing:
+        print("All models already trained.")
+        return
+
+    print(f"Training {len(missing)} models: {missing}")
+    try:
+        import train_model
+        importlib.reload(train_model)
+        for disease in missing:
+            print(f"  Training {disease}...")
+            try:
+                train_model.train(disease)
+                print(f"  ✓ {disease} trained")
+            except Exception as e:
+                print(f"  ✗ {disease} failed: {e}")
+    except Exception as e:
+        print(f"train_model import failed: {e}")
+
+
 if __name__ == "__main__":
     run_setup()

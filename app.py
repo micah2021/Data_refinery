@@ -1,44 +1,35 @@
 """
 app.py — Nigeria Health AI Data Refinery Dashboard
 ===================================================
-Production-ready Streamlit dashboard — 6 pages:
-  1. Overview       — database health, key metrics
-  2. Data Explorer  — browse, filter, download all tables
-  3. Disease Map    — incidence by zone/state, seasonal, climate
-  4. Maternal Health — maternal & child indicators
-  5. Data Quality   — completeness, bias flags, reporting weights
-  6. Insights       — top risk LGAs, poverty correlation, model readiness
+Single-file Streamlit dashboard with 4 pages:
+  1. 🏠 Overview       — database health, key metrics
+  2. 🔍 Data Explorer  — browse, filter, download all tables
+  3. 🗺️  Disease Map    — incidence choropleth by zone/LGA
+  4. 👶 Maternal Health — maternal & child indicators
+  5. 📊 Data Quality   — completeness, bias flags, reporting lag
+  6. 💡 Insights       — AI-ready summaries, top risk LGAs
 
 Run:
     streamlit run app.py
+
+Requirements:
+    pip install streamlit plotly pandas
 """
 
-import os
 import sqlite3
+import os
 from contextlib import contextmanager
 from pathlib import Path
 
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import streamlit as st
 
-# ── Configuration ─────────────────────────────────────────────────────────────
-# ── Cloud database bootstrap ──────────────────────────────────────────────────
-import subprocess, sys
-_DB = Path(os.getenv("DB_PATH", "./nigeria.db"))
-
-if not _DB.exists() or _DB.stat().st_size < 1_000_000:
-    _placeholder = st.empty()
-    _placeholder.info("⏳ Building database on first launch — please wait 3–4 minutes...")
-    try:
-        import startup
-        startup.run_setup()
-    except Exception as _e:
-        st.error(f"Startup error: {_e}")
-    _placeholder.empty()
-    st.rerun()
+# ── Config ──────────────────────────────────────────────────────────────────
 DB_PATH = os.getenv("DB_PATH", "./nigeria.db")
 
+# ── st.set_page_config must be first Streamlit call ─────────────────────────
 st.set_page_config(
     page_title="Nigeria Health AI Refinery",
     page_icon="🇳🇬",
@@ -46,19 +37,134 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ── Colour maps ───────────────────────────────────────────────────────────────
+# ── Colours ──────────────────────────────────────────────────────────────────
 ZONE_COLOURS = {
     "NC": "#4CAF50", "NE": "#F44336", "NW": "#FF9800",
     "SE": "#2196F3", "SS": "#9C27B0", "SW": "#00BCD4",
 }
 DISEASE_COLOURS = {
-    "malaria":      "#E53935", "cholera":      "#1E88E5",
-    "typhoid":      "#FDD835", "tuberculosis": "#8E24AA",
-    "meningitis":   "#FB8C00", "lassa_fever":  "#D81B60",
-    "diarrhoeal":   "#43A047", "yellow_fever": "#F4511E",
+    "malaria": "#E53935", "cholera": "#1E88E5",
+    "typhoid": "#FDD835", "tuberculosis": "#8E24AA",
+    "meningitis": "#FB8C00", "lassa_fever": "#D81B60",
+    "diarrhoeal": "#43A047", "yellow_fever": "#F4511E",
 }
 
-# ── Database helpers ──────────────────────────────────────────────────────────
+# ── Auto-build database on first run (Streamlit Cloud) ──────────────────────
+def _build_db_if_needed():
+    """Synchronously build nigeria.db before any queries run."""
+    db = Path(DB_PATH)
+    # Check if DB exists and has data
+    if db.exists() and db.stat().st_size > 500_000:
+        try:
+            c = sqlite3.connect(DB_PATH)
+            n = c.execute("SELECT COUNT(*) FROM lga").fetchone()[0]
+            c.close()
+            if n > 100:
+                return True  # DB is ready
+        except Exception:
+            pass
+
+    # Need to build — show progress UI
+    placeholder = st.empty()
+    with placeholder.container():
+        st.warning("⏳ **First run detected** — building Nigeria health database from synthetic data. This takes about 2 minutes...")
+        progress = st.progress(0, text="Initialising...")
+
+    try:
+        import sys, importlib
+        sys.path.insert(0, ".")
+
+        # Step 1: Schema
+        progress.progress(10, text="Creating database schema...")
+        import setup_db
+        importlib.reload(setup_db)
+
+        import sqlite3 as _sq, os as _os
+        if _os.path.exists(DB_PATH):
+            _os.remove(DB_PATH)
+        with open("nigeria_db_schema.sql", "r", encoding="utf-8") as f:
+            schema_sql = f.read()
+        _conn = _sq.connect(DB_PATH)
+        _conn.executescript(schema_sql)
+        _conn.commit()
+        _conn.close()
+
+        # Step 2: Seed LGAs
+        progress.progress(25, text="Seeding 770 Nigerian LGAs...")
+        import seed_nigeria
+        importlib.reload(seed_nigeria)
+        seed_nigeria.seed_lga_table(DB_PATH)
+
+        # Step 3: Load LGAs for CSV generation
+        _conn = _sq.connect(DB_PATH)
+        _conn.row_factory = _sq.Row
+        lgas = [dict(r) for r in _conn.execute(
+            "SELECT lga_id, lga_name, state, zone, lga_type FROM lga"
+        ).fetchall()]
+        _conn.close()
+
+        # Step 4: Generate CSVs
+        progress.progress(40, text="Generating climate and alert data...")
+        import os as _os2
+        _os2.makedirs("./data", exist_ok=True)
+        seed_nigeria.generate_ncdc_csv("./data/ncdc_alerts.csv", lgas)
+        seed_nigeria.generate_nimet_csv("./data/nimet_climate.csv", lgas)
+
+        # Step 5: Seed disease records
+        progress.progress(55, text="Generating disease records...")
+        import random
+        random.seed(42)
+        sample = random.sample(lgas, min(150, len(lgas)))
+        seed_nigeria.seed_disease_records(DB_PATH, sample)
+
+        # Step 6: Run data collector
+        progress.progress(70, text="Running data collector...")
+        try:
+            import data_collector
+            importlib.reload(data_collector)
+            data_collector.main()
+        except Exception as e:
+            st.warning(f"Data collector partial: {e}")
+
+        # Step 7: Build feature store
+        progress.progress(85, text="Building feature store...")
+        try:
+            import build_feature_store
+            importlib.reload(build_feature_store)
+            build_feature_store.main()
+        except Exception as e:
+            st.warning(f"Feature store partial: {e}")
+
+        progress.progress(90, text="Training RLRF models (this takes ~3 minutes)...")
+        try:
+            import train_model as _tm, importlib as _il
+            _il.reload(_tm)
+            Path("./models").mkdir(exist_ok=True)
+            DISEASES = ["malaria","cholera","typhoid","tuberculosis",
+                        "meningitis","lassa_fever","yellow_fever","diarrhoeal"]
+            for _d in DISEASES:
+                if not (Path("./models") / f"{_d}_rlrf.pkl").exists():
+                    try:
+                        _tm.train(_d)
+                    except Exception as _e:
+                        pass  # Skip failed models gracefully
+        except Exception as _e:
+            pass  # Models optional — dashboard still works
+
+        progress.progress(100, text="✅ All done!")
+        placeholder.success("✅ Database built and models trained! Loading dashboard...")
+        import time; time.sleep(2)
+        st.rerun()
+        return True
+
+    except Exception as e:
+        placeholder.error(f"❌ Database build failed: {e}")
+        st.stop()
+        return False
+
+_build_db_if_needed()
+
+# ── DB helpers ────────────────────────────────────────────────────────────────
 @contextmanager
 def connect():
     conn = sqlite3.connect(DB_PATH)
@@ -84,14 +190,12 @@ def table_counts() -> dict:
     with connect() as conn:
         for t in tables:
             try:
-                counts[t] = conn.execute(
-                    f"SELECT COUNT(*) FROM {t}"
-                ).fetchone()[0]
+                counts[t] = conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
             except Exception:
                 counts[t] = 0
     return counts
 
-# ── Sidebar ───────────────────────────────────────────────────────────────────
+# ── Sidebar navigation ────────────────────────────────────────────────────────
 with st.sidebar:
     st.image(
         "https://upload.wikimedia.org/wikipedia/commons/7/79/Flag_of_Nigeria.svg",
@@ -104,21 +208,21 @@ with st.sidebar:
     page = st.radio(
         "Navigate",
         [
-        "🏠 Overview",
-        "🔍 Data Explorer",
-        "🗺️ Disease Map",
-        "👶 Maternal Health",
-        "📊 Data Quality",
-        "💡 Insights",
-        "🔮 Predictions",        # ← add this line
+            "🏠 Overview",
+            "🔍 Data Explorer",
+            "🗺️ Disease Map",
+            "👶 Maternal Health",
+            "📊 Data Quality",
+            "💡 Insights",
+            "🤖 Predictions",
         ],
         label_visibility="collapsed",
     )
 
     st.divider()
     counts = table_counts()
-    total  = sum(counts.values())
     st.caption("**Database status**")
+    total = sum(counts.values())
     st.metric("Total rows", f"{total:,}")
     if Path(DB_PATH).exists():
         size_mb = Path(DB_PATH).stat().st_size / 1_048_576
@@ -132,43 +236,49 @@ with st.sidebar:
 if page == "🏠 Overview":
     st.title("🇳🇬 Nigeria Health AI — Data Refinery")
     st.caption(
-        "Disease pattern detection trained on Nigerian-native data across "
-        "770 LGAs, 8 diseases, and 6 geopolitical zones."
+        "AI-native disease pattern detection trained exclusively on Nigerian data. "
+        "No Western benchmarks. No imported assumptions."
     )
     st.divider()
 
-    # Row 1 — key counts
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("📍 LGAs",             f"{counts.get('lga', 0):,}")
-    c2.metric("🦠 Disease Records",  f"{counts.get('disease_record', 0):,}")
-    c3.metric("🌧️ Climate Records",  f"{counts.get('climate_health', 0):,}")
-    c4.metric("🧠 Feature Rows",     f"{counts.get('feature_store', 0):,}")
+    # Table count cards
+    cols = st.columns(4)
+    cards = [
+        ("LGAs", "lga", "📍"),
+        ("Disease Records", "disease_record", "🦠"),
+        ("Climate Records", "climate_health", "🌧️"),
+        ("Feature Rows", "feature_store", "🧠"),
+    ]
+    for col, (label, table, icon) in zip(cols, cards):
+        col.metric(f"{icon} {label}", f"{counts.get(table, 0):,}")
 
-    # Row 2
-    c5, c6, c7, c8 = st.columns(4)
-    c5.metric("💰 Socioeconomic",    f"{counts.get('socioeconomic', 0):,}")
-    c6.metric("👶 Maternal Health",  f"{counts.get('maternal_health', 0):,}")
-    c7.metric("🚨 Alerts",           f"{counts.get('surveillance_alert', 0):,}")
-    c8.metric("✅ Quality Log",       f"{counts.get('data_quality_log', 0):,}")
+    cols2 = st.columns(4)
+    cards2 = [
+        ("Socioeconomic", "socioeconomic", "💰"),
+        ("Maternal Health", "maternal_health", "👶"),
+        ("Surveillance Alerts", "surveillance_alert", "🚨"),
+        ("Quality Log", "data_quality_log", "✅"),
+    ]
+    for col, (label, table, icon) in zip(cols2, cards2):
+        col.metric(f"{icon} {label}", f"{counts.get(table, 0):,}")
 
     st.divider()
 
+    # Zone distribution
     col1, col2 = st.columns(2)
 
-    # Zone distribution
     with col1:
         st.subheader("Feature rows by zone")
         zone_df = query("""
-            SELECT zone,
-                   COUNT(*) AS rows,
-                   ROUND(AVG(incidence_rate), 3) AS avg_incidence
-            FROM feature_store
-            GROUP BY zone ORDER BY zone
+            SELECT zone, COUNT(*) as rows,
+                   ROUND(AVG(incidence_rate),2) as avg_incidence
+            FROM feature_store GROUP BY zone ORDER BY zone
         """)
         if not zone_df.empty:
             fig = px.bar(
                 zone_df, x="zone", y="rows",
-                color="zone", color_discrete_map=ZONE_COLOURS,
+                color="zone",
+                color_discrete_map=ZONE_COLOURS,
                 text="rows",
                 labels={"zone": "Zone", "rows": "Feature Rows"},
             )
@@ -180,13 +290,11 @@ if page == "🏠 Overview":
             )
             st.plotly_chart(fig, use_container_width=True)
 
-    # Disease coverage
     with col2:
         st.subheader("Disease coverage")
         dis_df = query("""
-            SELECT disease_category, COUNT(*) AS rows
-            FROM feature_store
-            GROUP BY disease_category ORDER BY rows DESC
+            SELECT disease_category, COUNT(*) as rows
+            FROM feature_store GROUP BY disease_category ORDER BY rows DESC
         """)
         if not dis_df.empty:
             fig2 = px.pie(
@@ -203,11 +311,11 @@ if page == "🏠 Overview":
             )
             st.plotly_chart(fig2, use_container_width=True)
 
-    # Weekly trend
-    st.subheader("National weekly incidence trend")
+    # Incidence trend
+    st.subheader("National weekly incidence trend (all diseases)")
     trend_df = query("""
         SELECT epi_year, epi_week,
-               ROUND(AVG(incidence_rate), 4) AS mean_incidence,
+               ROUND(AVG(incidence_rate), 3) as mean_incidence,
                disease_category
         FROM feature_store
         WHERE incidence_rate IS NOT NULL
@@ -223,10 +331,7 @@ if page == "🏠 Overview":
             trend_df, x="period", y="mean_incidence",
             color="disease_category",
             color_discrete_map=DISEASE_COLOURS,
-            labels={
-                "period": "Epidemiological Week",
-                "mean_incidence": "Mean Incidence / 10k population",
-            },
+            labels={"period": "Epi Week", "mean_incidence": "Mean Incidence / 10k"},
         )
         fig3.update_layout(
             height=360,
@@ -242,13 +347,13 @@ if page == "🏠 Overview":
 # ════════════════════════════════════════════════════════════════════════════
 elif page == "🔍 Data Explorer":
     st.title("🔍 Data Explorer")
-    st.caption("Browse, filter, and export any table from the Nigeria health database.")
+    st.caption("Browse, filter, and download any table from nigeria.db")
 
     TABLE_OPTIONS = {
         "feature_store":      "Feature Store (AI training data)",
         "disease_record":     "Disease Records",
         "maternal_health":    "Maternal Health",
-        "socioeconomic":      "Socioeconomic Indicators",
+        "socioeconomic":      "Socioeconomic",
         "climate_health":     "Climate & Environment",
         "surveillance_alert": "Surveillance Alerts",
         "lga":                "LGA Reference",
@@ -258,70 +363,74 @@ elif page == "🔍 Data Explorer":
     col1, col2, col3 = st.columns([2, 2, 1])
     with col1:
         selected_table = st.selectbox(
-            "Table",
-            options=list(TABLE_OPTIONS.keys()),
+            "Table", options=list(TABLE_OPTIONS.keys()),
             format_func=lambda x: TABLE_OPTIONS[x],
         )
     with col2:
         row_limit = st.select_slider(
-            "Rows to display",
-            options=[100, 500, 1000, 5000, 10000],
-            value=500,
+            "Rows to display", options=[100, 500, 1000, 5000, 10000], value=500
         )
+    with col3:
+        st.write("")
+        st.write("")
+        refresh = st.button("🔄 Refresh")
 
-    # Filters
+    # Dynamic filters
     with st.expander("⚙️ Filters", expanded=True):
-        fcol1, fcol2, fcol3 = st.columns(3)
-        zone_filter    = ""
+        fcol1, fcol2, fcol3, fcol4 = st.columns(4)
+
+        zone_filter = ""
         disease_filter = ""
-        year_filter    = ""
+        year_filter = ""
+        state_filter = ""
 
-        # Zone
-        zones = query("SELECT DISTINCT zone FROM lga ORDER BY zone")["zone"].tolist()
-        sel_zones = fcol1.multiselect("Zone", zones)
-        if sel_zones:
-            z_list = ",".join(f"'{z}'" for z in sel_zones)
-            zone_filter = (
-                f"AND zone IN ({z_list})"
-                if selected_table == "lga"
-                else f"AND l.zone IN ({z_list})"
-            )
+        # Zone filter (tables with zone column)
+        zone_tables = ["feature_store", "disease_record", "lga"]
+        if selected_table in zone_tables or selected_table == "lga":
+            zones = query("SELECT DISTINCT zone FROM lga ORDER BY zone")["zone"].tolist()
+            selected_zones = fcol1.multiselect("Zone", zones, default=[])
+            if selected_zones:
+                z_list = ",".join(f"'{z}'" for z in selected_zones)
+                if selected_table == "lga":
+                    zone_filter = f"AND zone IN ({z_list})"
+                else:
+                    zone_filter = f"AND l.zone IN ({z_list})"
 
-        # Disease
+        # Disease filter
         if selected_table in ["feature_store", "disease_record", "surveillance_alert"]:
             diseases = query(
                 "SELECT DISTINCT disease_category FROM feature_store ORDER BY 1"
             )["disease_category"].tolist()
-            sel_dis = fcol2.multiselect("Disease", diseases)
-            if sel_dis:
-                d_list = ",".join(f"'{d}'" for d in sel_dis)
+            sel_diseases = fcol2.multiselect("Disease", diseases, default=[])
+            if sel_diseases:
+                d_list = ",".join(f"'{d}'" for d in sel_diseases)
                 disease_filter = f"AND disease_category IN ({d_list})"
 
-        # Year
-        if selected_table in ["feature_store", "socioeconomic",
-                               "maternal_health", "climate_health"]:
-            yr_col = "epi_year" if selected_table == "feature_store" else "year"
-            yr_tbl = "feature_store" if selected_table == "feature_store" else selected_table
-            years  = query(
-                f"SELECT DISTINCT {yr_col} AS yr FROM {yr_tbl} ORDER BY 1"
-            )["yr"].dropna().astype(int).tolist()
-            if len(years) > 1:
+        # Year filter
+        year_tables = ["feature_store", "socioeconomic", "maternal_health", "climate_health"]
+        if selected_table in year_tables:
+            years = query(f"SELECT DISTINCT epi_year as yr FROM feature_store ORDER BY 1"
+                          if selected_table == "feature_store"
+                          else f"SELECT DISTINCT year as yr FROM {selected_table} ORDER BY 1"
+                         )["yr"].dropna().astype(int).tolist()
+            if years and len(years) > 1:
                 yr_range = fcol3.select_slider(
-                    "Year range", options=years,
+                    "Year range",
+                    options=years,
                     value=(min(years), max(years)),
                 )
-                year_filter = (
-                    f"AND epi_year BETWEEN {yr_range[0]} AND {yr_range[1]}"
-                    if selected_table == "feature_store"
-                    else f"AND year BETWEEN {yr_range[0]} AND {yr_range[1]}"
-                )
+                if selected_table == "feature_store":
+                    year_filter = f"AND epi_year BETWEEN {yr_range[0]} AND {yr_range[1]}"
+                else:
+                    year_filter = f"AND year BETWEEN {yr_range[0]} AND {yr_range[1]}"
             elif years:
-                year_filter = (
-                    f"AND epi_year = {years[0]}"
-                    if selected_table == "feature_store"
-                    else f"AND year = {years[0]}"
-                )
+                fcol3.info(f"Year: {years[0]}")
+                if selected_table == "feature_store":
+                    year_filter = f"AND epi_year = {years[0]}"
+                else:
+                    year_filter = f"AND year = {years[0]}"
 
+    # Build query per table
     QUERIES = {
         "feature_store": f"""
             SELECT fs.*, l.lga_name, l.state
@@ -385,25 +494,24 @@ elif page == "🔍 Data Explorer":
         """,
     }
 
-    df = query(QUERIES.get(
-        selected_table, f"SELECT * FROM {selected_table} LIMIT {row_limit}"
-    ))
+    df = query(QUERIES.get(selected_table, f"SELECT * FROM {selected_table} LIMIT {row_limit}"))
 
-    st.write(f"**{len(df):,} rows** · {TABLE_OPTIONS.get(selected_table, selected_table)}")
+    st.write(f"**{len(df):,} rows** · {selected_table}")
     st.dataframe(df, use_container_width=True, height=480)
 
-    dc1, dc2 = st.columns([1, 4])
-    with dc1:
+    # Download
+    dcol1, dcol2 = st.columns([1, 4])
+    with dcol1:
+        csv = df.to_csv(index=False)
         st.download_button(
-            "⬇️ Download CSV",
-            df.to_csv(index=False),
+            "⬇️ Download CSV", csv,
             file_name=f"{selected_table}_export.csv",
             mime="text/csv",
         )
-    with dc2:
+    with dcol2:
+        json_str = df.to_json(orient="records", indent=2)
         st.download_button(
-            "⬇️ Download JSON",
-            df.to_json(orient="records", indent=2),
+            "⬇️ Download JSON", json_str,
             file_name=f"{selected_table}_export.json",
             mime="application/json",
         )
@@ -414,28 +522,29 @@ elif page == "🔍 Data Explorer":
 # ════════════════════════════════════════════════════════════════════════════
 elif page == "🗺️ Disease Map":
     st.title("🗺️ Disease Incidence Map")
-    st.caption("Spatial disease patterns across Nigerian zones and states.")
+    st.caption("Spatial disease patterns across Nigerian zones and LGAs")
 
+    col1, col2, col3 = st.columns(3)
     diseases = query(
         "SELECT DISTINCT disease_category FROM feature_store ORDER BY 1"
     )["disease_category"].tolist()
     years = query(
-        "SELECT DISTINCT epi_year FROM feature_store WHERE epi_year IS NOT NULL ORDER BY 1"
+        "SELECT DISTINCT epi_year FROM feature_store ORDER BY 1"
     )["epi_year"].dropna().astype(int).tolist()
 
-    col1, col2, col3 = st.columns(3)
     sel_disease = col1.selectbox("Disease", diseases)
-    sel_year    = col2.selectbox("Year", years, index=len(years) - 1 if years else 0)
+    sel_year    = col2.selectbox("Year", years, index=len(years)-1)
     agg_by      = col3.radio("Aggregate by", ["Zone", "State"], horizontal=True)
 
+    # Zone-level incidence
     if agg_by == "Zone":
         map_df = query("""
             SELECT fs.zone,
-                   ROUND(AVG(fs.incidence_rate), 4)   AS mean_incidence,
-                   ROUND(MAX(fs.incidence_rate), 4)   AS max_incidence,
-                   SUM(fs.active_alert_flag)           AS alerts,
-                   ROUND(AVG(fs.reporting_weight), 2) AS data_quality,
-                   COUNT(*)                            AS feature_rows
+                   ROUND(AVG(fs.incidence_rate), 3)      AS mean_incidence,
+                   ROUND(MAX(fs.incidence_rate), 3)      AS max_incidence,
+                   SUM(fs.active_alert_flag)              AS alerts,
+                   ROUND(AVG(fs.reporting_weight), 2)    AS data_quality,
+                   COUNT(*)                               AS feature_rows
             FROM feature_store fs
             WHERE fs.disease_category = ?
               AND fs.epi_year = ?
@@ -444,36 +553,41 @@ elif page == "🗺️ Disease Map":
         """, (sel_disease, sel_year))
 
         if map_df.empty:
-            st.warning("No data for this selection.")
+            st.warning("No data for this combination. Try a different disease or year.")
         else:
-            mc1, mc2 = st.columns([2, 1])
-            with mc1:
+            mcol1, mcol2 = st.columns([2, 1])
+            with mcol1:
                 fig = px.bar(
                     map_df, x="zone", y="mean_incidence",
-                    color="zone", color_discrete_map=ZONE_COLOURS,
+                    color="zone",
+                    color_discrete_map=ZONE_COLOURS,
+                    error_y=None,
                     text="mean_incidence",
                     title=f"{sel_disease.replace('_',' ').title()} — Mean Incidence by Zone ({sel_year})",
-                    labels={"zone": "Zone", "mean_incidence": "Mean Incidence / 10k"},
+                    labels={"zone": "Zone", "mean_incidence": "Mean Incidence / 10k pop"},
                 )
-                fig.update_traces(texttemplate="%{text:.4f}", textposition="outside")
+                fig.update_traces(texttemplate="%{text:.2f}", textposition="outside")
                 fig.update_layout(
                     showlegend=False, height=380,
                     plot_bgcolor="rgba(0,0,0,0)",
                     paper_bgcolor="rgba(0,0,0,0)",
                 )
                 st.plotly_chart(fig, use_container_width=True)
-            with mc2:
+
+            with mcol2:
                 st.subheader("Zone summary")
                 st.dataframe(
-                    map_df[["zone", "mean_incidence", "alerts", "data_quality"]],
+                    map_df[["zone","mean_incidence","alerts","data_quality"]],
                     use_container_width=True, hide_index=True,
                 )
-    else:
+
+    else:  # State level
         map_df = query("""
             SELECT l.state,
-                   ROUND(AVG(fs.incidence_rate), 4) AS mean_incidence,
-                   SUM(fs.active_alert_flag)         AS alerts,
-                   COUNT(DISTINCT fs.lga_id)         AS lgas_covered
+                   ROUND(AVG(fs.incidence_rate), 3)   AS mean_incidence,
+                   ROUND(MAX(fs.incidence_rate), 3)   AS max_incidence,
+                   SUM(fs.active_alert_flag)           AS alerts,
+                   COUNT(DISTINCT fs.lga_id)           AS lgas_covered
             FROM feature_store fs
             JOIN lga l ON l.lga_id = fs.lga_id
             WHERE fs.disease_category = ?
@@ -487,7 +601,7 @@ elif page == "🗺️ Disease Map":
                 map_df.head(20), x="state", y="mean_incidence",
                 color="mean_incidence",
                 color_continuous_scale="Reds",
-                title=f"{sel_disease.replace('_',' ').title()} — Top 20 States ({sel_year})",
+                title=f"{sel_disease.replace('_',' ').title()} — Top 20 States by Incidence ({sel_year})",
                 labels={"state": "State", "mean_incidence": "Mean Incidence / 10k"},
             )
             fig.update_layout(
@@ -503,7 +617,7 @@ elif page == "🗺️ Disease Map":
     st.subheader(f"Seasonal pattern — {sel_disease.replace('_',' ').title()}")
     seasonal_df = query("""
         SELECT season,
-               ROUND(AVG(incidence_rate), 4) AS mean_incidence,
+               ROUND(AVG(incidence_rate), 3) AS mean_incidence,
                COUNT(*) AS n
         FROM feature_store
         WHERE disease_category = ?
@@ -513,31 +627,31 @@ elif page == "🗺️ Disease Map":
     """, (sel_disease,))
 
     if not seasonal_df.empty:
-        sc1, sc2 = st.columns(2)
-        with sc1:
+        scol1, scol2 = st.columns(2)
+        with scol1:
             fig_s = px.bar(
                 seasonal_df, x="season", y="mean_incidence",
                 color="season",
-                color_discrete_sequence=["#FF9800", "#4CAF50", "#2196F3"],
+                color_discrete_sequence=["#FF9800","#4CAF50","#2196F3"],
                 text="mean_incidence",
                 labels={"season": "Season", "mean_incidence": "Mean Incidence / 10k"},
             )
-            fig_s.update_traces(texttemplate="%{text:.4f}", textposition="outside")
+            fig_s.update_traces(texttemplate="%{text:.2f}", textposition="outside")
             fig_s.update_layout(
                 showlegend=False, height=300,
                 plot_bgcolor="rgba(0,0,0,0)",
                 paper_bgcolor="rgba(0,0,0,0)",
             )
             st.plotly_chart(fig_s, use_container_width=True)
-        with sc2:
+        with scol2:
             st.caption("**Seasonal breakdown**")
             st.dataframe(seasonal_df, use_container_width=True, hide_index=True)
 
-    # Climate correlation — removed OLS trendline (requires statsmodels)
+    # Climate correlation
     st.subheader("Climate correlation")
     clim_df = query("""
-        SELECT ROUND(rainfall_mm, 0) AS rainfall_mm,
-               ROUND(incidence_rate, 4) AS incidence_rate,
+        SELECT ROUND(rainfall_mm, 0) as rainfall_mm,
+               ROUND(incidence_rate, 3) as incidence_rate,
                zone, season
         FROM feature_store
         WHERE disease_category = ?
@@ -549,7 +663,7 @@ elif page == "🗺️ Disease Map":
         fig_c = px.scatter(
             clim_df, x="rainfall_mm", y="incidence_rate",
             color="zone", color_discrete_map=ZONE_COLOURS,
-            symbol="season", opacity=0.55,
+            symbol="season", opacity=0.6,
             labels={
                 "rainfall_mm": "Monthly Rainfall (mm)",
                 "incidence_rate": "Incidence / 10k",
@@ -569,20 +683,19 @@ elif page == "🗺️ Disease Map":
 # ════════════════════════════════════════════════════════════════════════════
 elif page == "👶 Maternal Health":
     st.title("👶 Maternal & Child Health")
-    st.caption("LGA-level maternal and child health indicators.")
+    st.caption("LGA-level maternal and child indicators from NDHS/DHIS2")
 
-    years = query(
-        "SELECT DISTINCT year FROM maternal_health ORDER BY year"
-    )["year"].tolist()
+    years = query("SELECT DISTINCT year FROM maternal_health ORDER BY year"
+                  )["year"].tolist()
     zones = query("SELECT DISTINCT zone FROM lga ORDER BY zone")["zone"].tolist()
 
     col1, col2 = st.columns(2)
-    sel_year = col1.selectbox("Year", years, index=len(years) - 1 if years else 0)
+    sel_year = col1.selectbox("Year", years, index=len(years)-1 if years else 0)
     sel_zone = col2.multiselect("Zone", zones, default=zones)
 
     zone_sql = ""
     if sel_zone:
-        z_list   = ",".join(f"'{z}'" for z in sel_zone)
+        z_list = ",".join(f"'{z}'" for z in sel_zone)
         zone_sql = f"AND l.zone IN ({z_list})"
 
     mh_df = query(f"""
@@ -596,12 +709,13 @@ elif page == "👶 Maternal Health":
     if mh_df.empty:
         st.warning("No maternal health data for this selection.")
     else:
+        # KPI row
         k1, k2, k3, k4 = st.columns(4)
         k1.metric("Avg ANC Coverage",
                   f"{mh_df['anc_coverage_pct'].mean():.1f}%")
-        k2.metric("Avg Skilled Birth Attendance",
+        k2.metric("Avg Skilled Birth",
                   f"{mh_df['skilled_birth_pct'].mean():.1f}%")
-        k3.metric("Avg MMR (per 100k live births)",
+        k3.metric("Avg MMR (per 100k)",
                   f"{mh_df['maternal_mortality_ratio'].mean():.0f}")
         k4.metric("Avg Stunting Rate",
                   f"{mh_df['stunting_rate_pct'].mean():.1f}%")
@@ -610,17 +724,13 @@ elif page == "👶 Maternal Health":
         col1, col2 = st.columns(2)
 
         with col1:
-            st.subheader("Maternal mortality ratio by zone")
-            zone_mmr = (
-                mh_df.groupby("zone")["maternal_mortality_ratio"]
-                .mean().reset_index()
-            )
+            st.subheader("Maternal mortality by zone")
+            zone_mmr = mh_df.groupby("zone")["maternal_mortality_ratio"].mean().reset_index()
             fig = px.bar(
                 zone_mmr, x="zone", y="maternal_mortality_ratio",
                 color="zone", color_discrete_map=ZONE_COLOURS,
                 text="maternal_mortality_ratio",
-                labels={"zone": "Zone",
-                        "maternal_mortality_ratio": "MMR per 100k"},
+                labels={"zone": "Zone", "maternal_mortality_ratio": "MMR per 100k"},
             )
             fig.update_traces(texttemplate="%{text:.0f}", textposition="outside")
             fig.update_layout(
@@ -638,10 +748,10 @@ elif page == "👶 Maternal Health":
                 size="maternal_mortality_ratio",
                 hover_data=["lga_name", "state"],
                 labels={
-                    "anc_coverage_pct":  "ANC Coverage (%)",
-                    "skilled_birth_pct": "Skilled Birth Attendance (%)",
+                    "anc_coverage_pct": "ANC Coverage (%)",
+                    "skilled_birth_pct": "Skilled Birth (%)",
                 },
-            )
+                )
             fig2.update_layout(
                 height=340,
                 plot_bgcolor="rgba(0,0,0,0)",
@@ -650,21 +760,14 @@ elif page == "👶 Maternal Health":
             st.plotly_chart(fig2, use_container_width=True)
 
         st.subheader("Nutrition indicators by zone")
-        nutri_df = (
-            mh_df.groupby("zone")[
-                ["stunting_rate_pct", "wasting_rate_pct", "exclusive_bf_pct"]
-            ].mean().reset_index()
-        )
+        nutri_df = mh_df.groupby("zone")[
+            ["stunting_rate_pct", "wasting_rate_pct", "exclusive_bf_pct"]
+        ].mean().reset_index()
         nutri_melt = nutri_df.melt(
             id_vars="zone",
             value_vars=["stunting_rate_pct", "wasting_rate_pct", "exclusive_bf_pct"],
             var_name="indicator", value_name="value",
         )
-        nutri_melt["indicator"] = nutri_melt["indicator"].map({
-            "stunting_rate_pct":  "Stunting Rate (%)",
-            "wasting_rate_pct":   "Wasting Rate (%)",
-            "exclusive_bf_pct":   "Exclusive Breastfeeding (%)",
-        })
         fig3 = px.bar(
             nutri_melt, x="zone", y="value", color="indicator",
             barmode="group",
@@ -678,12 +781,13 @@ elif page == "👶 Maternal Health":
         )
         st.plotly_chart(fig3, use_container_width=True)
 
+        # Top 10 highest risk LGAs
         st.subheader("🚨 Highest maternal mortality LGAs")
-        top_risk = mh_df.nlargest(10, "maternal_mortality_ratio")[[
-            "lga_name", "state", "zone",
-            "maternal_mortality_ratio", "anc_coverage_pct",
-            "skilled_birth_pct", "stunting_rate_pct", "data_quality_score",
-        ]]
+        top_risk = mh_df.nlargest(10, "maternal_mortality_ratio")[
+            ["lga_name", "state", "zone",
+             "maternal_mortality_ratio", "anc_coverage_pct",
+             "skilled_birth_pct", "stunting_rate_pct", "data_quality_score"]
+        ]
         st.dataframe(top_risk, use_container_width=True, hide_index=True)
 
 
@@ -693,100 +797,101 @@ elif page == "👶 Maternal Health":
 elif page == "📊 Data Quality":
     st.title("📊 Data Quality Audit")
     st.caption(
-        "Transparency layer documenting completeness, reporting weights, "
-        "and bias flags across all data sources."
+        "Transparency layer — completeness, bias flags, reporting weights. "
+        "Essential for study validity."
     )
 
+    # Reporting weight distribution
     col1, col2 = st.columns(2)
 
     with col1:
-        st.subheader("Reporting weight by zone")
+        st.subheader("Reporting weight distribution")
         rw_df = query("""
             SELECT zone,
                    ROUND(AVG(reporting_weight), 3) AS mean_weight,
                    ROUND(MIN(reporting_weight), 3) AS min_weight,
-                   ROUND(MAX(reporting_weight), 3) AS max_weight
+                   ROUND(MAX(reporting_weight), 3) AS max_weight,
+                   COUNT(*) AS rows
             FROM feature_store
             WHERE reporting_weight IS NOT NULL
             GROUP BY zone ORDER BY mean_weight
         """)
-        if not rw_df.empty:
-            fig = px.bar(
-                rw_df, x="zone", y="mean_weight",
-                color="zone", color_discrete_map=ZONE_COLOURS,
-                text="mean_weight",
-                labels={"zone": "Zone", "mean_weight": "Mean Reporting Weight (0–1)"},
-            )
-            fig.update_traces(texttemplate="%{text:.2f}", textposition="outside")
-            fig.update_layout(
-                showlegend=False, height=340,
-                plot_bgcolor="rgba(0,0,0,0)",
-                paper_bgcolor="rgba(0,0,0,0)",
-                yaxis=dict(range=[0, 1.1]),
-            )
-            st.plotly_chart(fig, use_container_width=True)
+        fig = px.bar(
+            rw_df, x="zone", y="mean_weight",
+            color="zone", color_discrete_map=ZONE_COLOURS,
+            error_y=rw_df["max_weight"] - rw_df["mean_weight"],
+            text="mean_weight",
+            labels={"zone": "Zone", "mean_weight": "Mean Reporting Weight (0–1)"},
+        )
+        fig.update_traces(texttemplate="%{text:.2f}", textposition="outside")
+        fig.update_layout(
+            showlegend=False, height=340,
+            plot_bgcolor="rgba(0,0,0,0)",
+            paper_bgcolor="rgba(0,0,0,0)",
+            yaxis=dict(range=[0, 1.1]),
+        )
+        st.plotly_chart(fig, use_container_width=True)
 
     with col2:
         st.subheader("Data quality by LGA type")
         lga_type_df = query("""
             SELECT lga_type,
-                   ROUND(AVG(reporting_weight), 3)  AS mean_weight,
-                   ROUND(AVG(completeness_pct), 1)  AS mean_completeness,
+                   ROUND(AVG(reporting_weight), 3) AS mean_weight,
+                   ROUND(AVG(completeness_pct), 1) AS mean_completeness,
                    COUNT(*) AS rows
             FROM feature_store
             WHERE lga_type IS NOT NULL
             GROUP BY lga_type
         """)
-        if not lga_type_df.empty:
-            lga_melt = lga_type_df.melt(
+        lga_type_melt = lga_type_df.melt(
             id_vars="lga_type",
-            value_vars=["mean_weight","mean_completeness"],
+            value_vars=["mean_weight", "mean_completeness"],
             var_name="Metric", value_name="Score"
-            )
-            lga_melt["Score"] = pd.to_numeric(lga_melt["Score"], errors="coerce")
-            fig2 = px.bar(
-             lga_melt, x="lga_type", y="Score", color="Metric",
-             barmode="group",
-             labels={"lga_type":"LGA Type"},
-             color_discrete_sequence=["#2196F3","#4CAF50"],
-            )
-            fig2.update_layout(
-                height=340,
-                plot_bgcolor="rgba(0,0,0,0)",
-                paper_bgcolor="rgba(0,0,0,0)",
-            )
-            st.plotly_chart(fig2, use_container_width=True)
+        )
+        lga_type_melt["Score"] = lga_type_melt["Score"].astype(float)
+        fig2 = px.bar(
+            lga_type_melt, x="lga_type", y="Score", color="Metric",
+            barmode="group",
+            labels={"lga_type": "LGA Type"},
+            color_discrete_sequence=["#2196F3", "#4CAF50"],
+        )
+        fig2.update_layout(
+            height=340,
+            plot_bgcolor="rgba(0,0,0,0)",
+            paper_bgcolor="rgba(0,0,0,0)",
+        )
+        st.plotly_chart(fig2, use_container_width=True)
 
     st.divider()
 
+    # Source breakdown
     st.subheader("Records by data source")
     src_df = query("""
-        SELECT source,
-               COUNT(*) AS records,
-               ROUND(AVG(data_quality_score), 2) AS avg_quality
+        SELECT source, COUNT(*) as records,
+               ROUND(AVG(data_quality_score), 2) as avg_quality
         FROM disease_record
         GROUP BY source ORDER BY records DESC
     """)
-    sc1, sc2 = st.columns(2)
-    with sc1:
-        if not src_df.empty:
-            fig3 = px.pie(
-                src_df, names="source", values="records",
-                hole=0.4,
-                color_discrete_sequence=px.colors.qualitative.Set2,
-            )
-            fig3.update_layout(
-                height=300,
-                plot_bgcolor="rgba(0,0,0,0)",
-                paper_bgcolor="rgba(0,0,0,0)",
-            )
-            st.plotly_chart(fig3, use_container_width=True)
-    with sc2:
+    scol1, scol2 = st.columns(2)
+    with scol1:
+        fig3 = px.pie(
+            src_df, names="source", values="records",
+            hole=0.4,
+            color_discrete_sequence=px.colors.qualitative.Set2,
+        )
+        fig3.update_layout(
+            height=300,
+            plot_bgcolor="rgba(0,0,0,0)",
+            paper_bgcolor="rgba(0,0,0,0)",
+        )
+        st.plotly_chart(fig3, use_container_width=True)
+    with scol2:
         st.dataframe(src_df, use_container_width=True, hide_index=True)
 
     st.divider()
 
-    st.subheader("Lag feature coverage by disease")
+    # Lag coverage
+    st.subheader("Lag feature coverage (AI model readiness)")
     lag_df = query("""
         SELECT disease_category,
                COUNT(*) AS total,
@@ -796,74 +901,56 @@ elif page == "📊 Data Quality":
         FROM feature_store
         GROUP BY disease_category
     """)
-    if not lag_df.empty:
-        lag_df["lag_1w_pct"] = (lag_df["lag_1w"] / lag_df["total"] * 100).round(1)
-        lag_df["lag_4w_pct"] = (lag_df["lag_4w"] / lag_df["total"] * 100).round(1)
-        lag_df["lag_8w_pct"] = (lag_df["lag_8w"] / lag_df["total"] * 100).round(1)
+    lag_df["lag_1w_pct"] = (lag_df["lag_1w"] / lag_df["total"] * 100).round(1)
+    lag_df["lag_4w_pct"] = (lag_df["lag_4w"] / lag_df["total"] * 100).round(1)
+    lag_df["lag_8w_pct"] = (lag_df["lag_8w"] / lag_df["total"] * 100).round(1)
 
-        fig4 = px.bar(
-            lag_df.melt(
-                id_vars="disease_category",
-                value_vars=["lag_1w_pct", "lag_4w_pct", "lag_8w_pct"],
-                var_name="lag", value_name="coverage_pct",
-            ),
-            x="disease_category", y="coverage_pct", color="lag",
-            barmode="group",
-            labels={
-                "disease_category": "Disease",
-                "coverage_pct": "Coverage (%)",
-                "lag": "Lag Window",
-            },
-            color_discrete_sequence=["#4CAF50", "#FF9800", "#F44336"],
-        )
-        fig4.update_layout(
-            height=360, xaxis_tickangle=30,
-            plot_bgcolor="rgba(0,0,0,0)",
-            paper_bgcolor="rgba(0,0,0,0)",
-            yaxis=dict(range=[0, 105]),
-        )
-        st.plotly_chart(fig4, use_container_width=True)
+    fig4 = px.bar(
+        lag_df.melt(
+            id_vars="disease_category",
+            value_vars=["lag_1w_pct", "lag_4w_pct", "lag_8w_pct"],
+            var_name="lag", value_name="coverage_pct",
+        ),
+        x="disease_category", y="coverage_pct", color="lag",
+        barmode="group",
+        labels={
+            "disease_category": "Disease",
+            "coverage_pct": "Coverage (%)",
+            "lag": "Lag Window",
+        },
+        color_discrete_sequence=["#4CAF50", "#FF9800", "#F44336"],
+    )
+    fig4.update_layout(
+        height=360, xaxis_tickangle=30,
+        plot_bgcolor="rgba(0,0,0,0)",
+        paper_bgcolor="rgba(0,0,0,0)",
+        yaxis=dict(range=[0, 105]),
+    )
+    st.plotly_chart(fig4, use_container_width=True)
 
-    st.divider()
-
-    st.subheader("Validity threat assessment")
+    # Validity threat flags
+    st.subheader("🚩 Validity threat checklist")
     threats = [
-        ("Reporting bias",
-         "Urban LGAs over-represented in disease records",
-         "reporting_weight < 0.6 in rural zones",
-         "⚠️ Mitigated via sample weighting"),
-        ("Selection bias",
-         "Hospital records skew toward higher-SES patients",
-         "nhia_coverage_pct < 5% in NE/NW zones",
-         "⚠️ NHIA coverage included as explicit model feature"),
-        ("Label noise",
-         "Inconsistent ICD-10 coding across facilities",
-         "icd10_code NULL in raw disease records",
-         "✅ ICD-10 harmoniser applied in refinery"),
-        ("Temporal confounding",
-         "COVID-19 disrupted health-seeking behaviour (2020–2022)",
-         "Post-2020 data requires careful interpretation",
-         "⚠️ TimeSeriesSplit CV prevents data leakage"),
-        ("Ecological fallacy",
-         "LGA-level patterns do not imply individual-level risk",
-         "All predictions are population-level only",
-         "✅ Documented in all model outputs"),
-        ("External validity",
-         "Zone-specific models may not generalise across zones",
-         "Zone stratification applied in feature store",
-         "✅ All 6 zones represented in training data"),
-        ("Rural data gap",
-         "Rural LGAs have systematically lower reporting completeness",
-         "lga_type=rural completeness < 60%",
-         "✅ Rural gap imputer applied in refinery"),
-        ("Synthetic maternal data",
-         "Maternal health baseline generated from NDHS zone distributions",
-         "data_quality_score = 0.45 for synthetic records",
-         "⚠️ Replace with real DHS microdata when available"),
+        ("Reporting bias",        "Urban LGAs over-represented in disease_record",
+         "reporting_weight < 0.6 in rural zones",     "⚠️ Mitigated by reporting_weight"),
+        ("Selection bias",        "EHR patients skew higher SES",
+         "nhia_coverage_pct < 5% in NE/NW",           "⚠️ Flagged in feature_store"),
+        ("Label noise",           "Inconsistent ICD-10 coding across facilities",
+         "icd10_code NULL in raw disease_record",      "✅ ICD-10 harmoniser applied"),
+        ("Temporal confounding",  "Post-COVID health-seeking behaviour shift",
+         "Data from 2020 onward needs flag",           "⚠️ Flag year >= 2020 in models"),
+        ("Ecological fallacy",    "LGA-level patterns ≠ individual-level",
+         "All predictions are population-level",       "✅ Documented in schema"),
+        ("External validity",     "SW model may not generalise to NE",
+         "Zone stratification in feature_store",       "✅ All 6 zones present"),
+        ("Rural data gap",        "Rural LGAs have lower completeness",
+         "lga_type=rural completeness < 60%",          "✅ Rural gap imputer applied"),
+        ("Synthetic data",        "maternal_health rows are synthetic baseline",
+         "data_quality_score = 0.45 for synthetic",   "⚠️ Replace with real DHS data"),
     ]
     threat_df = pd.DataFrame(
         threats,
-        columns=["Threat", "Description", "Signal", "Mitigation"],
+        columns=["Threat", "Description", "Signal", "Status"],
     )
     st.dataframe(threat_df, use_container_width=True, hide_index=True)
 
@@ -872,27 +959,24 @@ elif page == "📊 Data Quality":
 # PAGE 6 — INSIGHTS
 # ════════════════════════════════════════════════════════════════════════════
 elif page == "💡 Insights":
-    st.title("💡 Insights")
-    st.caption(
-        "Top risk LGAs, disease-poverty relationships, "
-        "and model readiness across all disease categories."
-    )
+    st.title("💡 AI Insights")
+    st.caption("Top risk LGAs, outbreak signals, and model-ready summaries")
 
+    # Top risk LGAs by disease
+    st.subheader("🚨 Highest incidence LGAs by disease")
     diseases = query(
         "SELECT DISTINCT disease_category FROM feature_store ORDER BY 1"
     )["disease_category"].tolist()
     sel_disease = st.selectbox("Select disease", diseases)
 
-    # Top risk LGAs
-    st.subheader("🚨 Highest incidence LGAs")
     top_lga_df = query("""
         SELECT l.lga_name, l.state, l.zone, l.lga_type,
-               ROUND(AVG(fs.incidence_rate), 4)        AS mean_incidence,
-               ROUND(MAX(fs.incidence_rate), 4)        AS peak_incidence,
-               ROUND(AVG(fs.reporting_weight), 2)      AS data_quality,
-               SUM(fs.active_alert_flag)               AS total_alerts,
-               ROUND(AVG(fs.poverty_headcount_pct), 1) AS poverty_pct,
-               ROUND(AVG(fs.rainfall_mm), 1)           AS avg_rainfall_mm
+               ROUND(AVG(fs.incidence_rate), 3)       AS mean_incidence,
+               ROUND(MAX(fs.incidence_rate), 3)       AS peak_incidence,
+               ROUND(AVG(fs.reporting_weight), 2)     AS data_quality,
+               SUM(fs.active_alert_flag)              AS total_alerts,
+               ROUND(AVG(fs.poverty_headcount_pct),1) AS poverty_pct,
+               ROUND(AVG(fs.rainfall_mm), 1)          AS avg_rainfall_mm
         FROM feature_store fs
         JOIN lga l ON l.lga_id = fs.lga_id
         WHERE fs.disease_category = ?
@@ -909,11 +993,10 @@ elif page == "💡 Insights":
                 top_lga_df.head(15), x="lga_name", y="mean_incidence",
                 color="zone", color_discrete_map=ZONE_COLOURS,
                 text="mean_incidence",
-                title=f"Top 15 LGAs — {sel_disease.replace('_',' ').title()}",
-                labels={"lga_name": "LGA",
-                        "mean_incidence": "Mean Incidence / 10k"},
+                title=f"Top 15 LGAs — {sel_disease.replace('_',' ').title()} incidence",
+                labels={"lga_name": "LGA", "mean_incidence": "Mean Incidence / 10k"},
             )
-            fig.update_traces(texttemplate="%{text:.4f}", textposition="outside")
+            fig.update_traces(texttemplate="%{text:.2f}", textposition="outside")
             fig.update_layout(
                 height=400, xaxis_tickangle=45,
                 plot_bgcolor="rgba(0,0,0,0)",
@@ -921,217 +1004,430 @@ elif page == "💡 Insights":
             )
             st.plotly_chart(fig, use_container_width=True)
         with col2:
-            st.caption("**Top 20 highest-incidence LGAs**")
+            st.caption("**Top 20 risk LGAs**")
             st.dataframe(
-                top_lga_df[[
-                    "lga_name", "state", "zone",
-                    "mean_incidence", "data_quality", "total_alerts",
-                ]],
+                top_lga_df[["lga_name","state","zone","mean_incidence","data_quality","total_alerts"]],
                 use_container_width=True, hide_index=True, height=400,
             )
 
     st.divider()
 
-    # Poverty × disease
-    st.subheader("Poverty rate vs disease incidence")
+    # Poverty-disease correlation
+    st.subheader("💰 Poverty × Disease incidence")
     pov_df = query("""
-        SELECT ROUND(se.poverty_headcount_pct, 0) AS poverty_pct,
-               ROUND(AVG(fs.incidence_rate), 4)   AS mean_incidence,
-               fs.zone
-        FROM feature_store fs
-        JOIN socioeconomic se
-            ON se.lga_id = fs.lga_id
-            AND se.year  = fs.epi_year
-        WHERE fs.disease_category = ?
-          AND se.poverty_headcount_pct IS NOT NULL
-          AND fs.incidence_rate IS NOT NULL
-        GROUP BY ROUND(se.poverty_headcount_pct, 0), fs.zone
+        SELECT ROUND(poverty_headcount_pct, 0) AS poverty_pct,
+               ROUND(AVG(incidence_rate), 3)   AS mean_incidence,
+               zone, disease_category
+        FROM feature_store
+        WHERE poverty_headcount_pct IS NOT NULL
+          AND incidence_rate IS NOT NULL
+          AND disease_category = ?
+        GROUP BY ROUND(poverty_headcount_pct, 0), zone
         LIMIT 2000
     """, (sel_disease,))
     if not pov_df.empty:
         fig_p = px.scatter(
             pov_df, x="poverty_pct", y="mean_incidence",
             color="zone", color_discrete_map=ZONE_COLOURS,
-            opacity=0.65,
+            trendline="ols", opacity=0.7,
             labels={
-                "poverty_pct":     "Poverty Headcount (%)",
-                "mean_incidence":  "Mean Incidence / 10k",
+                "poverty_pct": "Poverty Headcount (%)",
+                "mean_incidence": "Mean Incidence / 10k",
             },
-            title=f"Poverty vs {sel_disease.replace('_',' ').title()} incidence by zone",
         )
         fig_p.update_layout(
-            height=380,
+            height=360,
             plot_bgcolor="rgba(0,0,0,0)",
             paper_bgcolor="rgba(0,0,0,0)",
         )
         st.plotly_chart(fig_p, use_container_width=True)
-    else:
-        st.info("Socioeconomic data not yet joined for this disease. "
-                "Run fix_socioeconomic.py to populate the socioeconomic table.")
 
     st.divider()
 
-    # Model readiness — fixed query joining socioeconomic directly
-    st.subheader("Model readiness by disease")
+    # Model readiness summary
+    st.subheader("🧠 Model readiness by disease")
     readiness_df = query("""
-        SELECT fs.disease_category,
-               COUNT(DISTINCT fs.lga_id)                                          AS lgas_covered,
-               COUNT(*)                                                            AS total_rows,
-               ROUND(AVG(fs.reporting_weight), 2)                                 AS avg_quality,
-               ROUND(100.0 * SUM(CASE WHEN fs.incidence_lag_4w IS NOT NULL
-                                      THEN 1 ELSE 0 END) / COUNT(*), 1)           AS lag4w_pct,
-               ROUND(100.0 * SUM(CASE WHEN fs.rainfall_mm IS NOT NULL
-                                      THEN 1 ELSE 0 END) / COUNT(*), 1)           AS climate_pct,
-               ROUND(100.0 * SUM(CASE WHEN se.poverty_headcount_pct IS NOT NULL
-                                      THEN 1 ELSE 0 END) / COUNT(*), 1)           AS ses_pct
-        FROM feature_store fs
-        LEFT JOIN socioeconomic se
-            ON se.lga_id = fs.lga_id
-            AND se.year  = fs.epi_year
-        GROUP BY fs.disease_category
+        SELECT disease_category,
+               COUNT(DISTINCT lga_id)                                         AS lgas_covered,
+               COUNT(*)                                                        AS total_rows,
+               ROUND(AVG(reporting_weight), 2)                                AS avg_quality,
+               ROUND(100.0 * SUM(CASE WHEN incidence_lag_4w IS NOT NULL
+                                      THEN 1 ELSE 0 END) / COUNT(*), 1)       AS lag4w_pct,
+               ROUND(100.0 * SUM(CASE WHEN rainfall_mm IS NOT NULL
+                                      THEN 1 ELSE 0 END) / COUNT(*), 1)       AS climate_pct,
+               ROUND(100.0 * SUM(CASE WHEN poverty_headcount_pct IS NOT NULL
+                                      THEN 1 ELSE 0 END) / COUNT(*), 1)       AS ses_pct
+        FROM feature_store
+        GROUP BY disease_category
         ORDER BY avg_quality DESC
     """)
-
     if not readiness_df.empty:
         readiness_df["overall_score"] = (
             readiness_df["avg_quality"] * 40
-            + readiness_df["lag4w_pct"] * 0.30
+            + readiness_df["lag4w_pct"] * 0.3
             + readiness_df["climate_pct"] * 0.15
             + readiness_df["ses_pct"] * 0.15
         ).round(1)
 
-        def badge(score):
+        def score_badge(score):
             if score >= 70:   return "🟢 Ready"
-            if score >= 50:   return "🟡 Partial"
-            return "🔴 Needs data"
+            elif score >= 50: return "🟡 Partial"
+            else:             return "🔴 Needs data"
 
-        readiness_df["status"] = readiness_df["overall_score"].apply(badge)
+        readiness_df["status"] = readiness_df["overall_score"].apply(score_badge)
 
         fig_r = px.bar(
             readiness_df, x="disease_category", y="overall_score",
             color="status",
             color_discrete_map={
-                "🟢 Ready":      "#4CAF50",
-                "🟡 Partial":    "#FF9800",
+                "🟢 Ready": "#4CAF50",
+                "🟡 Partial": "#FF9800",
                 "🔴 Needs data": "#F44336",
             },
             text="overall_score",
-            labels={"disease_category": "Disease",
-                    "overall_score": "Readiness Score"},
-            title="AI Model Readiness Score by Disease",
+            labels={"disease_category": "Disease", "overall_score": "Readiness Score"},
         )
         fig_r.update_traces(texttemplate="%{text:.1f}", textposition="outside")
         fig_r.update_layout(
-            height=380, xaxis_tickangle=30,
+            height=360, xaxis_tickangle=30,
             plot_bgcolor="rgba(0,0,0,0)",
             paper_bgcolor="rgba(0,0,0,0)",
             yaxis=dict(range=[0, 105]),
         )
         st.plotly_chart(fig_r, use_container_width=True)
-
-        st.caption(
-            "**Readiness score** combines data quality weight (40%), "
-            "lag feature coverage (30%), climate coverage (15%), "
-            "and socioeconomic coverage (15%)."
-        )
         st.dataframe(readiness_df, use_container_width=True, hide_index=True)
-        # ════════════════════════════════════════════════════════════════════════════
-# PAGE 7 — PREDICTIONS
-# ════════════════════════════════════════════════════════════════════════════
-elif page == "🔮 Predictions":
-    st.title("🔮 RLRF Outbreak Predictions")
-    st.caption(
-        "4-week ahead outbreak forecasting using N-Step SARSA + Random Forest. "
-        "Select a disease and zone to view predictions."
+
+    st.divider()
+    st.info(
+        "**Next step — Phase 3:** Train your AI models directly on the `feature_store` table. "
+        "Use `reporting_weight` as sample weights in scikit-learn or PyTorch. "
+        "Evaluate only on African benchmarks (APHRC). Never use WHO global baselines.",
+        icon="🧠",
     )
 
-    # Check if predictions table exists
-    try:
-        pred_count = query(
-            "SELECT COUNT(*) AS n FROM model_predictions"
-        )["n"].iloc[0]
-    except Exception:
-        pred_count = 0
+# ════════════════════════════════════════════════════════════════════════════
+# PAGE 7 — PREDICTIONS (RLRF Model)
+# ════════════════════════════════════════════════════════════════════════════
+elif page == "🤖 Predictions":
+    st.title("🤖 RLRF Outbreak Predictions")
+    st.caption(
+        "4-week ahead outbreak forecasting using N-Step SARSA + Random Forest. "
+        "Select a disease and LGA to generate a prediction."
+    )
+    st.divider()
 
-    if pred_count == 0:
+    # ── Model status ─────────────────────────────────────────────────────
+    from pathlib import Path as _Path
+    import json as _json
+
+    models_dir = _Path("models")
+    trained = sorted([f.stem.replace("_rlrf","") for f in models_dir.glob("*_rlrf.pkl")]) if models_dir.exists() else []
+    registry_path = models_dir / "model_registry.json"
+
+    if not trained:
         st.warning(
-            "No predictions found in the database. "
-            "Run `python outbreak_model.py --train-all --export` "
-            "locally to generate predictions, then redeploy."
+            "No trained models found. Run `python train_model.py` first.",
+            icon="⚠️"
         )
-    else:
-        diseases = query(
-            "SELECT DISTINCT disease_category FROM model_predictions ORDER BY 1"
-        )["disease_category"].tolist()
-        zones = query("SELECT DISTINCT zone FROM lga ORDER BY zone")["zone"].tolist()
+        st.code("python train_model.py", language="bash")
+        st.stop()
 
-        col1, col2 = st.columns(2)
-        sel_disease = col1.selectbox("Disease", diseases)
-        sel_zone    = col2.multiselect("Zone", zones, default=zones[:2])
+    # ── Model performance cards ───────────────────────────────────────────
+    st.subheader("📊 Model Performance Summary")
 
-        zone_sql = ""
-        if sel_zone:
-            z_list   = ",".join(f"'{z}'" for z in sel_zone)
-            zone_sql = f"AND l.zone IN ({z_list})"
+    # Load registry; patch in any missing diseases so all 8 show up
+    registry = {}
+    if registry_path.exists():
+        with open(registry_path) as f:
+            registry = _json.load(f)
 
-        pred_df = query(f"""
-            SELECT mp.*, l.lga_name, l.state, l.zone
-            FROM model_predictions mp
-            JOIN lga l ON l.lga_id = mp.lga_id
-            WHERE mp.disease_category = ? {zone_sql}
-            ORDER BY mp.predicted_year DESC, mp.predicted_week DESC
-            LIMIT 1000
-        """, (sel_disease,))
+    registered_diseases = {d["disease"] for d in registry.get("diseases", []) if "disease" in d}
+    patched = False
+    for dis in trained:
+        if dis not in registered_diseases:
+            registry.setdefault("diseases", []).append({
+                "disease": dis,
+                "r2": 0.0,
+                "r2_no_sarsa": 0.0,
+                "sarsa_improvement_r2": 0.0,
+            })
+            patched = True
+    if patched:
+        st.info(
+            "ℹ️ Some models are trained but missing from model_registry.json. "
+            "Showing all diseases. Re-run `python train_model.py` to populate full metrics.",
+            icon="ℹ️",
+        )
 
-        if not pred_df.empty:
-            # KPIs
-            k1, k2, k3 = st.columns(3)
-            k1.metric("Predictions", f"{len(pred_df):,}")
-            k2.metric("Mean Predicted Incidence",
-                      f"{pred_df['predicted_incidence'].mean():.4f}")
-            k3.metric("LGAs covered",
-                      f"{pred_df['lga_id'].nunique():,}")
+    perf_data = [
+        d for d in registry.get("diseases", [])
+        if "r2" in d
+    ]
+    if perf_data:
+        cols = st.columns(min(len(perf_data), 4))
+        for i, m in enumerate(perf_data[:4]):
+            with cols[i % 4]:
+                delta = f"+{m.get('sarsa_improvement_r2',0):.4f} vs RF-only"
+                st.metric(
+                    label=m["disease"].replace("_"," ").title(),
+                    value=f"R² {m.get('r2',0):.4f}",
+                    delta=delta,
+                )
+        if len(perf_data) > 4:
+            cols2 = st.columns(min(len(perf_data)-4, 4))
+            for i, m in enumerate(perf_data[4:]):
+                with cols2[i % 4]:
+                    delta = f"+{m.get('sarsa_improvement_r2',0):.4f} vs RF-only"
+                    st.metric(
+                        label=m["disease"].replace("_"," ").title(),
+                        value=f"R² {m.get('r2',0):.4f}",
+                        delta=delta,
+                    )
 
-            st.subheader("Predicted incidence by zone")
-            zone_pred = (
-                pred_df.groupby("zone")["predicted_incidence"]
-                .mean().reset_index()
-                .rename(columns={"predicted_incidence": "mean_predicted"})
-            )
-            fig = px.bar(
-                zone_pred, x="zone", y="mean_predicted",
-                color="zone", color_discrete_map=ZONE_COLOURS,
-                text="mean_predicted",
-                labels={"zone": "Zone",
-                        "mean_predicted": "Mean Predicted Incidence / 10k"},
-            )
-            fig.update_traces(texttemplate="%{text:.4f}",
-                              textposition="outside")
-            fig.update_layout(
-                showlegend=False, height=360,
-                plot_bgcolor="rgba(0,0,0,0)",
-                paper_bgcolor="rgba(0,0,0,0)",
-            )
-            st.plotly_chart(fig, use_container_width=True)
+        # Ablation chart — RLRF vs RF
+        import plotly.graph_objects as _go
+        st.subheader("RLRF vs RF-only (Ablation Study — your Table 3)")
+        ab_df = pd.DataFrame([
+            {
+                "Disease": d["disease"].replace("_"," ").title(),
+                "RLRF (R²)": d.get("r2", 0),
+                "RF-only (R²)": d.get("r2_no_sarsa", 0),
+            }
+            for d in perf_data
+        ])
+        fig_ab = _go.Figure()
+        fig_ab.add_bar(
+            name="RLRF (N-Step SARSA + RF)",
+            x=ab_df["Disease"],
+            y=ab_df["RLRF (R²)"],
+            marker_color="#1E88E5",
+            text=ab_df["RLRF (R²)"].round(4),
+            textposition="outside",
+        )
+        fig_ab.add_bar(
+            name="RF-only (no SARSA)",
+            x=ab_df["Disease"],
+            y=ab_df["RF-only (R²)"],
+            marker_color="#E53935",
+            text=ab_df["RF-only (R²)"].round(4),
+            textposition="outside",
+        )
+        fig_ab.update_layout(
+            barmode="group",
+            height=380,
+            yaxis=dict(title="R² Score", range=[0, 0.80]),
+            plot_bgcolor="rgba(0,0,0,0)",
+            paper_bgcolor="rgba(0,0,0,0)",
+            legend=dict(orientation="h", y=1.1),
+        )
+        st.plotly_chart(fig_ab, use_container_width=True)
 
-            st.subheader("Top predicted high-risk LGAs")
-            top_pred = (
-                pred_df.groupby(["lga_name", "state", "zone"])
-                ["predicted_incidence"].mean().reset_index()
-                .nlargest(15, "predicted_incidence")
-                .round(4)
-            )
-            st.dataframe(top_pred, use_container_width=True, hide_index=True)
+    st.divider()
 
-            st.subheader("Raw predictions")
-            st.dataframe(
-                pred_df[[
-                    "lga_name", "state", "zone",
-                    "predicted_year", "predicted_week",
-                    "predicted_incidence", "lower_bound", "upper_bound",
-                    "model_type",
-                ]],
-                use_container_width=True, hide_index=True, height=400,
-            )
+    # ── Live prediction ───────────────────────────────────────────────────
+    st.subheader("🔮 Generate 4-Week Outbreak Forecast")
+
+    col_sel1, col_sel2 = st.columns(2)
+    with col_sel1:
+        selected_disease = st.selectbox(
+            "Select disease",
+            options=trained,
+            format_func=lambda x: x.replace("_"," ").title()
+        )
+    with col_sel2:
+        lgas_df = query("SELECT lga_id, lga_name, state, zone, lga_type FROM lga ORDER BY state, lga_name")
+        lga_options = {
+            f"{r.lga_name} — {r.state} ({r.zone})": r.lga_id
+            for r in lgas_df.itertuples()
+        }
+        selected_lga_label = st.selectbox("Select LGA", options=list(lga_options.keys()))
+        selected_lga_id = lga_options[selected_lga_label]
+
+    # Load latest feature_store row for this LGA+disease
+    fs_row = query("""
+        SELECT fs.*, l.pop_2022_est, l.area_km2
+        FROM feature_store fs
+        JOIN lga l ON l.lga_id = fs.lga_id
+        WHERE fs.lga_id = ?
+          AND fs.disease_category = ?
+        ORDER BY fs.epi_year DESC, fs.epi_week DESC
+        LIMIT 1
+    """, (selected_lga_id, selected_disease))
+
+    if st.button("🚀 Generate Prediction", type="primary"):
+        if fs_row.empty:
+            st.error("No feature data found for this LGA + disease combination.")
         else:
-            st.info("No predictions for this selection.")
+            try:
+                import sys as _sys
+                import importlib as _il
+                _sys.path.insert(0, ".")
+                tm = _il.import_module("train_model")
+                _il.reload(tm)
+
+                row_dict = fs_row.iloc[0].to_dict()
+                result = tm.predict_outbreak(selected_disease, row_dict)
+
+                if "error" in result:
+                    st.error(result["error"])
+                else:
+                    st.success("Prediction generated successfully!")
+                    st.divider()
+
+                    # Main result cards
+                    c1, c2, c3 = st.columns(3)
+                    inc = result["predicted_incidence_per_10k"]
+                    prob = result["outbreak_probability"]
+                    unc = result["prediction_uncertainty"]
+
+                    c1.metric(
+                        "Predicted Incidence",
+                        f"{inc:.2f} / 10,000",
+                        help="Cases per 10,000 population in 4 weeks"
+                    )
+                    c2.metric(
+                        "Outbreak Probability",
+                        f"{prob:.1%}",
+                        delta="High risk" if prob > 0.6 else "Moderate" if prob > 0.35 else "Low risk",
+                        delta_color="inverse",
+                        help="Probability that incidence exceeds 75th percentile"
+                    )
+                    c3.metric(
+                        "Prediction Uncertainty",
+                        f"± {unc:.3f}",
+                        help="Standard deviation across 300 RF trees"
+                    )
+
+                    # Risk level banner
+                    if prob > 0.70:
+                        st.error(f"🚨 HIGH OUTBREAK RISK — Immediate surveillance response recommended")
+                    elif prob > 0.45:
+                        st.warning(f"⚠️ ELEVATED RISK — Enhanced monitoring advised")
+                    else:
+                        st.success(f"✅ LOW RISK — Routine surveillance adequate")
+
+                    # Current state context
+                    st.divider()
+                    st.subheader("📋 Current State Context")
+                    ctx_cols = st.columns(4)
+                    ctx_cols[0].metric("Current Incidence", f"{row_dict.get('incidence_rate', 0):.2f}")
+                    ctx_cols[1].metric("Lag 1w", f"{row_dict.get('incidence_lag_1w', 0):.2f}")
+                    ctx_cols[2].metric("Lag 4w", f"{row_dict.get('incidence_lag_4w', 0):.2f}")
+                    ctx_cols[3].metric("Rainfall", f"{row_dict.get('rainfall_mm', 0):.1f} mm")
+
+                    # Historical trend for this LGA
+                    hist_df = query("""
+                        SELECT epi_week, incidence_rate
+                        FROM feature_store
+                        WHERE lga_id = ? AND disease_category = ?
+                        ORDER BY epi_year, epi_week
+                    """, (selected_lga_id, selected_disease))
+
+                    if not hist_df.empty:
+                        import plotly.graph_objects as _go2
+                        fig_hist = _go2.Figure()
+                        fig_hist.add_scatter(
+                            x=hist_df["epi_week"],
+                            y=hist_df["incidence_rate"],
+                            mode="lines",
+                            name="Historical incidence",
+                            line=dict(color="#1E88E5", width=2),
+                        )
+                        # Add prediction point
+                        last_week = hist_df["epi_week"].max()
+                        pred_week = min(last_week + 4, 52)
+                        fig_hist.add_scatter(
+                            x=[pred_week],
+                            y=[inc],
+                            mode="markers",
+                            name="4-week forecast",
+                            marker=dict(
+                                color="#E53935", size=14,
+                                symbol="star",
+                            ),
+                        )
+                        # Uncertainty band
+                        fig_hist.add_scatter(
+                            x=[pred_week, pred_week],
+                            y=[max(0, inc-unc), inc+unc],
+                            mode="lines",
+                            name="Uncertainty range",
+                            line=dict(color="#E53935", dash="dash", width=1),
+                        )
+                        fig_hist.update_layout(
+                            title=f"{selected_disease.replace('_',' ').title()} — "
+                                  f"{selected_lga_label.split('—')[0].strip()} weekly incidence",
+                            xaxis_title="Epi Week",
+                            yaxis_title="Incidence / 10,000",
+                            height=350,
+                            plot_bgcolor="rgba(0,0,0,0)",
+                            paper_bgcolor="rgba(0,0,0,0)",
+                            legend=dict(orientation="h", y=1.1),
+                        )
+                        st.plotly_chart(fig_hist, use_container_width=True)
+
+                    st.caption(
+                        f"Model: RLRF (N-Step SARSA + Random Forest + GB) | "
+                        f"Forecast horizon: 4 weeks | "
+                        f"Training: epi-weeks 1-36 | "
+                        f"Model: {result.get('model_type','RLRF')}"
+                    )
+
+            except Exception as e:
+                st.error(f"Prediction error: {e}")
+                import traceback
+                st.code(traceback.format_exc())
+
+    st.divider()
+
+    # ── Feature importance chart ──────────────────────────────────────────
+    st.subheader("🔑 Feature Importance (SARSA features highlighted)")
+    fi_path = _Path("results") / f"{selected_disease}_feature_importance.csv"
+    if fi_path.exists():
+        fi_df = pd.read_csv(fi_path).head(20)
+        sarsa_features = [
+            "v_state","advantage","td_error_1w","td_error_4w",
+            "td_error_8w","v_x_climate","v_x_deprivation",
+            "td_ratio","q_no_alert","q_rumour","q_suspected",
+            "q_confirmed","policy_score","advantage_x_zone"
+        ]
+        fi_df["is_sarsa"] = fi_df["feature"].isin(sarsa_features)
+        fi_df["colour"] = fi_df["is_sarsa"].map({True: "#E53935", False: "#1E88E5"})
+        fi_df["label"] = fi_df["feature"] + fi_df["is_sarsa"].map(
+            {True: " ← SARSA", False: ""}
+        )
+
+        import plotly.express as _px
+        fig_fi = _px.bar(
+            fi_df,
+            x="importance", y="label",
+            orientation="h",
+            color="is_sarsa",
+            color_discrete_map={True: "#E53935", False: "#1E88E5"},
+            labels={"importance": "Feature Importance", "label": "Feature"},
+            title=f"Top 20 features — {selected_disease.replace('_',' ').title()}",
+        )
+        fig_fi.update_layout(
+            height=520,
+            showlegend=True,
+            yaxis=dict(autorange="reversed"),
+            plot_bgcolor="rgba(0,0,0,0)",
+            paper_bgcolor="rgba(0,0,0,0)",
+            legend=dict(
+                title="Feature type",
+                orientation="h", y=1.05,
+            ),
+        )
+        fig_fi.update_traces(
+            selector=dict(marker_color="#E53935"),
+            name="SARSA feature",
+        )
+        fig_fi.update_traces(
+            selector=dict(marker_color="#1E88E5"),
+            name="Standard feature",
+        )
+        st.plotly_chart(fig_fi, use_container_width=True)
+        st.caption("🔴 Red = SARSA-derived features | 🔵 Blue = standard features")
+    else:
+        st.info(f"Run `python train_model.py --disease {selected_disease}` to generate feature importance data.")
+
