@@ -80,23 +80,56 @@ def connect():
 
 
 def load_time_series(disease: str, lga_id: int | None = None) -> pd.DataFrame:
-    """Load weekly incidence time series for one disease."""
-    lga_clause = f"AND lga_id = {lga_id}" if lga_id else ""
+    """
+    Load weekly incidence time series for one disease.
+    If no lga_id given, selects the highest-quality LGA to avoid
+    variance collapse from national aggregation (which causes negative R²).
+    """
+    if lga_id:
+        lga_clause = f"AND lga_id = {lga_id}"
+        group_clause = "GROUP BY epi_year, epi_week"
+        agg = "AVG(incidence_rate) AS incidence_rate, AVG(reporting_weight) AS weight"
+    else:
+        # Pick the LGA with most observations AND highest mean non-zero incidence
+        # This avoids near-zero series that blow up MAPE and R²
+        with connect() as conn:
+            best = conn.execute(f"""
+                SELECT lga_id,
+                       COUNT(*) as cnt,
+                       AVG(reporting_weight) as wt,
+                       AVG(incidence_rate) as mean_inc,
+                       SUM(CASE WHEN incidence_rate > 0 THEN 1 ELSE 0 END) as nonzero
+                FROM feature_store
+                WHERE disease_category = '{disease}'
+                  AND incidence_rate IS NOT NULL
+                GROUP BY lga_id
+                HAVING cnt >= 100 AND nonzero >= 50
+                ORDER BY mean_inc DESC, wt DESC
+                LIMIT 1
+            """).fetchone()
+        if best:
+            lga_id = best[0]
+            log.info("Auto-selected LGA %d for %s (mean_inc=%.4f, n=%d, nonzero=%d)",
+                     lga_id, disease, best[3], best[1], best[4])
+        lga_clause = f"AND lga_id = {lga_id}" if lga_id else ""
+        group_clause = "GROUP BY epi_year, epi_week"
+        agg = "AVG(incidence_rate) AS incidence_rate, AVG(reporting_weight) AS weight"
+
     sql = f"""
         SELECT epi_year, epi_week,
-               AVG(incidence_rate)    AS incidence_rate,
-               AVG(reporting_weight)  AS weight
+               {agg}
         FROM feature_store
         WHERE disease_category = '{disease}'
           AND incidence_rate IS NOT NULL
           {lga_clause}
-        GROUP BY epi_year, epi_week
+        {group_clause}
         ORDER BY epi_year, epi_week
     """
     with connect() as conn:
         df = pd.read_sql_query(sql, conn)
     df["t"] = range(len(df))
-    log.info("Time series: %d weekly observations for %s", len(df), disease)
+    log.info("Time series: %d weekly observations for %s (lga_id=%s)",
+             len(df), disease, lga_id)
     return df
 
 
@@ -104,12 +137,18 @@ def metrics(y_true, y_pred) -> dict:
     """Compute RMSE, MAE, R², MAPE."""
     y_true = np.array(y_true)
     y_pred = np.array(y_pred)
-    mape = np.mean(np.abs((y_true - y_pred) / (y_true + 1e-8))) * 100
+    # Robust MAPE: only compute on observations where y_true > 0.001
+    # avoids division by near-zero for rare disease series
+    mask = y_true > 0.001
+    if mask.sum() > 10:
+        mape = np.mean(np.abs((y_true[mask] - y_pred[mask]) / y_true[mask])) * 100
+    else:
+        mape = None
     return {
         "rmse": float(np.sqrt(mean_squared_error(y_true, y_pred))),
         "mae":  float(mean_absolute_error(y_true, y_pred)),
         "r2":   float(r2_score(y_true, y_pred)),
-        "mape": float(mape),
+        "mape": float(mape) if mape is not None else None,
         "n":    len(y_true),
     }
 
@@ -259,22 +298,68 @@ def run_lstm(series: pd.Series, horizon: int = 4, lookback: int = 8) -> dict:
 # ── Load RLRF results from saved metadata ─────────────────────────────────────
 
 def load_rlrf_scores(disease: str) -> dict:
-    """Load RLRF cross-validation scores from saved model metadata."""
-    meta_path = MODEL_DIR / f"outbreak_{disease}_ALL_meta.json"
-    if not meta_path.exists():
-        log.warning("No saved RLRF model for %s — run outbreak_model.py first", disease)
-        return {"model": "RLRF (N-Step SARSA + RF)", "rmse": None,
-                "mae": None, "r2": None, "mape": None, "n": 0}
-    meta = json.loads(meta_path.read_text())
-    cv   = meta["cv_scores"]
-    return {
-        "model": "RLRF (N-Step SARSA + RF)",
-        "rmse":  cv["mean_rmse"],
-        "mae":   cv["mean_mae"],
-        "r2":    cv["mean_r2"],
-        "mape":  None,
-        "n":     None,
-    }
+    """Load RLRF cross-validation scores from saved pkl model or registry."""
+    import joblib
+
+    # 1. Try model_registry.json first
+    registry_path = MODEL_DIR / "model_registry.json"
+    if registry_path.exists():
+        try:
+            registry = json.loads(registry_path.read_text())
+            for entry in registry.get("diseases", []):
+                if entry.get("disease") == disease and entry.get("r2") and entry["r2"] > 0:
+                    return {
+                        "model": "RLRF (N-Step SARSA + RF)",
+                        "rmse":  entry.get("rmse"),
+                        "mae":   entry.get("mae"),
+                        "r2":    entry.get("r2"),
+                        "mape":  entry.get("mape"),
+                        "n":     entry.get("n_test"),
+                    }
+        except Exception:
+            pass
+
+    # 2. Try loading metrics from pkl file directly
+    pkl_path = MODEL_DIR / f"{disease}_rlrf.pkl"
+    if pkl_path.exists():
+        try:
+            art = joblib.load(pkl_path)
+            m = art.get("metrics", {})
+            if m and m.get("r2", 0) > 0:
+                log.info("Loaded RLRF scores for %s from pkl: R²=%.3f", disease, m["r2"])
+                return {
+                    "model": "RLRF (N-Step SARSA + RF)",
+                    "rmse":  m.get("rmse"),
+                    "mae":   m.get("mae"),
+                    "r2":    m.get("r2"),
+                    "mape":  m.get("mape"),
+                    "n":     m.get("n_test"),
+                }
+        except Exception as e:
+            log.warning("Could not load pkl for %s: %s", disease, e)
+
+    # 3. Try rlrf_all_metrics.csv in results/
+    csv_path = Path("results/rlrf_all_metrics.csv")
+    if csv_path.exists():
+        try:
+            df_csv = pd.read_csv(csv_path)
+            row = df_csv[df_csv["disease"] == disease]
+            if not row.empty:
+                r = row.iloc[0]
+                return {
+                    "model": "RLRF (N-Step SARSA + RF)",
+                    "rmse":  float(r.get("rmse", 0)) or None,
+                    "mae":   float(r.get("mae", 0)) or None,
+                    "r2":    float(r.get("r2", 0)),
+                    "mape":  float(r.get("mape", 0)) or None,
+                    "n":     None,
+                }
+        except Exception:
+            pass
+
+    log.warning("No RLRF scores found for %s — run train_model.py first", disease)
+    return {"model": "RLRF (N-Step SARSA + RF)", "rmse": None,
+            "mae": None, "r2": None, "mape": None, "n": 0}
 
 
 # ── Full comparison ───────────────────────────────────────────────────────────
@@ -374,12 +459,10 @@ def main():
     parser.add_argument("--all-diseases",  action="store_true")
     parser.add_argument("--include-lstm",  action="store_true")
     parser.add_argument("--lga-id",        type=int, default=None)
-    parser.add_argument("--db",            default=DB_PATH)
+    parser.add_argument("--db", default="./nigeria.db")
     args = parser.parse_args()
 
-    global DB_PATH
     DB_PATH = args.db
-
     if args.all_diseases:
         with sqlite3.connect(DB_PATH) as conn:
             diseases = [
