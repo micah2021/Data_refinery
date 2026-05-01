@@ -1,130 +1,179 @@
 """
 startup.py — Auto-build nigeria.db on Streamlit Cloud
-======================================================
-Called from app.py on first run. Creates and seeds the database
-from scratch using synthetic data (reproducible with random.seed(42)).
-
-Steps:
-1. Create schema from nigeria_db_schema.sql
-2. Seed all tables via seed_nigeria.py functions
-3. Run data_collector.py to populate feature_store
+Seeds all tables directly without needing external APIs.
 """
 
 import os
 import sqlite3
 import random
-import csv
 import sys
 from pathlib import Path
 from datetime import date, timedelta
 
 DB_PATH = os.getenv("DB_PATH", "./nigeria.db")
-SCHEMA_PATH = "./nigeria_db_schema.sql"
-
 random.seed(42)
 
 
 def db_is_ready() -> bool:
-    """Check if database exists and has meaningful data."""
     db = Path(DB_PATH)
-    if not db.exists() or db.stat().st_size < 1_000_000:
+    if not db.exists() or db.stat().st_size < 500_000:
         return False
     try:
         conn = sqlite3.connect(DB_PATH)
-        count = conn.execute("SELECT COUNT(*) FROM lga").fetchone()[0]
+        lga_count = conn.execute("SELECT COUNT(*) FROM lga").fetchone()[0]
+        disease_count = conn.execute("SELECT COUNT(*) FROM disease_record").fetchone()[0]
         conn.close()
-        return count > 100
+        return lga_count > 100 and disease_count > 1000
     except Exception:
         return False
 
 
-def create_schema():
-    """Create database schema from SQL file."""
+def run_setup():
+    import importlib
+    sys.path.insert(0, ".")
+
+    print("Nigeria Health AI — Auto Database Setup")
+
+    # Step 1: Schema
+    print("[1/6] Creating schema...")
     if Path(DB_PATH).exists():
         os.remove(DB_PATH)
-    with open(SCHEMA_PATH, "r", encoding="utf-8") as f:
+    with open("nigeria_db_schema.sql", "r", encoding="utf-8") as f:
         schema_sql = f.read()
     conn = sqlite3.connect(DB_PATH)
     conn.executescript(schema_sql)
     conn.commit()
     conn.close()
-    print("✓ Schema created")
 
+    # Step 2: Seed LGAs
+    print("[2/6] Seeding 770 LGAs...")
+    import seed_nigeria
+    importlib.reload(seed_nigeria)
+    seed_nigeria.seed_lga_table(DB_PATH)
 
-def run_setup():
-    """Full database setup — called once on Streamlit Cloud."""
-    print("=" * 50)
-    print("Nigeria Health AI — Auto Database Setup")
-    print("=" * 50)
-
-    # Step 1: Schema
-    print("\n[1/4] Creating schema...")
-    create_schema()
-
-    # Step 2: Seed LGAs + disease records
-    print("\n[2/4] Seeding LGA and disease data...")
-    try:
-        # Import and run seed functions directly
-        sys.path.insert(0, ".")
-        import seed_nigeria
-        import importlib
-        importlib.reload(seed_nigeria)
-        seed_nigeria.main()
-        print("✓ Seed data inserted")
-    except Exception as e:
-        print(f"  seed_nigeria failed: {e} — running minimal seed")
-        _minimal_seed()
-
-    # Step 3: Run data collector
-    print("\n[3/4] Running data collector...")
-    try:
-        import data_collector
-        importlib.reload(data_collector)
-        data_collector.main()
-        print("✓ Data collector complete")
-    except Exception as e:
-        print(f"  data_collector failed: {e} — skipping")
-
-    # Step 4: Build feature store
-    print("\n[4/4] Building feature store...")
-    try:
-        import build_feature_store
-        importlib.reload(build_feature_store)
-        build_feature_store.main()
-        print("✓ Feature store built")
-    except Exception as e:
-        print(f"  build_feature_store failed: {e} — skipping")
-
-    # Verify
-    conn = sqlite3.connect(DB_PATH)
-    total = conn.execute(
-        "SELECT SUM(cnt) FROM ("
-        "SELECT COUNT(*) as cnt FROM lga UNION ALL "
-        "SELECT COUNT(*) FROM disease_record UNION ALL "
-        "SELECT COUNT(*) FROM feature_store)"
-    ).fetchone()[0]
-    conn.close()
-    print(f"\n✅ Database ready — {total:,} total rows across key tables")
-
-
-def _minimal_seed():
-    """Fallback minimal seed if seed_nigeria.py fails."""
-    from seed_nigeria import (
-        seed_lga_table, generate_ncdc_csv,
-        generate_nimet_csv, seed_disease_records, STATES
-    )
-    seed_lga_table(DB_PATH)
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     lgas = [dict(r) for r in conn.execute(
         "SELECT lga_id, lga_name, state, zone, lga_type FROM lga"
     ).fetchall()]
     conn.close()
-    Path("./data").mkdir(exist_ok=True)
-    generate_ncdc_csv("./data/ncdc_alerts.csv", lgas)
-    generate_nimet_csv("./data/nimet_climate.csv", lgas)
-    sample = random.sample(lgas, min(100, len(lgas)))
-    seed_disease_records(DB_PATH, sample)
+    print(f"  {len(lgas)} LGAs loaded")
+
+    # Step 3: Disease records
+    print("[3/6] Seeding disease records...")
+    sample = random.sample(lgas, min(200, len(lgas)))
+    seed_nigeria.seed_disease_records(DB_PATH, sample)
+
+    # Step 4: Surveillance alerts
+    print("[4/6] Seeding surveillance alerts...")
+    _seed_alerts_direct(lgas)
+
+    # Step 5: Socioeconomic
+    print("[5/6] Seeding socioeconomic data...")
+    _seed_socioeconomic_direct(lgas)
+
+    # Step 6: Climate + feature store via data_collector
+    print("[6/6] Running data collector...")
+    try:
+        Path("./data").mkdir(exist_ok=True)
+        seed_nigeria.generate_ncdc_csv("./data/ncdc_alerts.csv", lgas)
+        seed_nigeria.generate_nimet_csv("./data/nimet_climate.csv", lgas)
+        import data_collector
+        importlib.reload(data_collector)
+        data_collector.main()
+    except Exception as e:
+        print(f"  data_collector partial: {e}")
+        try:
+            import build_feature_store
+            importlib.reload(build_feature_store)
+            build_feature_store.main()
+        except Exception as e2:
+            print(f"  feature store: {e2}")
+
+    # Summary
+    conn = sqlite3.connect(DB_PATH)
+    for table in ["lga","disease_record","surveillance_alert",
+                  "climate_health","socioeconomic","feature_store"]:
+        try:
+            n = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+            print(f"  {table}: {n:,}")
+        except Exception:
+            pass
+    conn.close()
+    print("Setup complete!")
+
+
+def _seed_alerts_direct(lgas):
+    DISEASES = ["malaria","cholera","typhoid","tuberculosis",
+                "meningitis","lassa_fever","yellow_fever","diarrhoeal"]
+    LEVELS = ["suspected","confirmed","outbreak_declared","rumour"]
+    start = date(2019, 1, 1)
+    delta_days = (date(2025, 6, 30) - start).days
+    rows = []
+    for _ in range(3000):
+        lga = random.choice(lgas)
+        d = start + timedelta(days=random.randint(0, delta_days))
+        disease = random.choice(DISEASES)
+        level = random.choices(LEVELS, weights=[0.40,0.35,0.10,0.15])[0]
+        suspected = random.randint(1, 200)
+        confirmed = random.randint(0, suspected) if level in ("confirmed","outbreak_declared") else 0
+        deaths = random.randint(0, max(1, confirmed // 10))
+        rows.append((
+            lga["lga_id"], d.isoformat(),
+            d.strftime("W%V"), d.year,
+            disease, level, suspected, confirmed, deaths,
+            f"NCDC-{d.year}-{random.randint(10000,99999)}",
+            round(random.uniform(0.5, 0.95), 3), "ncdc_idsr"
+        ))
+    conn = sqlite3.connect(DB_PATH)
+    conn.executemany("""
+        INSERT OR IGNORE INTO surveillance_alert
+            (lga_id, alert_date, epi_week, epi_year, disease_category,
+             alert_level, suspected_cases, confirmed_cases, deaths,
+             ncdc_ref, data_quality_score, source)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+    """, rows)
+    conn.commit()
+    n = conn.execute("SELECT COUNT(*) FROM surveillance_alert").fetchone()[0]
+    conn.close()
+    print(f"  {n:,} alerts inserted")
+
+
+def _seed_socioeconomic_direct(lgas):
+    ZONE_SES = {
+        "NE": {"poverty":(0.55,0.80),"water":(0.25,0.55),"sanitation":(0.15,0.45)},
+        "NW": {"poverty":(0.50,0.75),"water":(0.30,0.60),"sanitation":(0.20,0.50)},
+        "NC": {"poverty":(0.35,0.65),"water":(0.40,0.70),"sanitation":(0.30,0.60)},
+        "SE": {"poverty":(0.25,0.55),"water":(0.50,0.80),"sanitation":(0.40,0.70)},
+        "SS": {"poverty":(0.30,0.60),"water":(0.45,0.75),"sanitation":(0.35,0.65)},
+        "SW": {"poverty":(0.20,0.50),"water":(0.55,0.85),"sanitation":(0.50,0.80)},
+    }
+    rows = []
+    for lga in lgas:
+        ses = ZONE_SES.get(lga["zone"], ZONE_SES["NC"])
+        for year in range(2015, 2024):
+            rows.append((
+                lga["lga_id"], year,
+                round(random.uniform(*ses["poverty"]), 3),
+                round(random.uniform(*ses["water"]), 3),
+                round(random.uniform(*ses["sanitation"]), 3),
+                round(random.uniform(0.1, 0.6), 3),
+                round(random.uniform(0.3, 0.9), 3),
+                round(random.uniform(0.2, 0.8), 3),
+                "world_bank_synthetic"
+            ))
+    conn = sqlite3.connect(DB_PATH)
+    conn.executemany("""
+        INSERT OR IGNORE INTO socioeconomic
+            (lga_id, year, poverty_headcount_pct, water_access_pct,
+             sanitation_pct, nhia_coverage_pct, reporting_weight,
+             health_facility_density, source)
+        VALUES (?,?,?,?,?,?,?,?,?)
+    """, rows)
+    conn.commit()
+    n = conn.execute("SELECT COUNT(*) FROM socioeconomic").fetchone()[0]
+    conn.close()
+    print(f"  {n:,} socioeconomic rows inserted")
 
 
 if __name__ == "__main__":
