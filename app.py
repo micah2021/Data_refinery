@@ -25,11 +25,44 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
-from startup import ensure_db_ready
-ensure_db_ready()  # builds nigeria.db if not present
 
 # ── Config ──────────────────────────────────────────────────────────────────
 DB_PATH = os.getenv("DB_PATH", "./nigeria.db")
+
+# ── Auto-download database from Google Drive if not present ─────────────────
+def _download_db():
+    """Download nigeria.db from Google Drive on first run (Streamlit Cloud)."""
+    db = Path(DB_PATH)
+    if db.exists() and db.stat().st_size > 10_000_000:
+        return  # Already downloaded (>10MB means real DB)
+    
+    GDRIVE_FILE_ID = "1b1UJ058XGy80W-iH0tCFmSFxX6LPexLb"
+    url = f"https://drive.google.com/uc?export=download&id={GDRIVE_FILE_ID}&confirm=t"
+    
+    try:
+        import requests
+        st.info("⏳ First run: downloading database (~160MB). This takes ~2 minutes...")
+        progress = st.progress(0, text="Connecting to database server...")
+        
+        with requests.get(url, stream=True, timeout=300) as r:
+            r.raise_for_status()
+            total = int(r.headers.get("content-length", 160_000_000))
+            downloaded = 0
+            with open(DB_PATH, "wb") as f:
+                for chunk in r.iter_content(chunk_size=1024*1024):
+                    if chunk:
+                        f.write(chunk)
+                        downloaded += len(chunk)
+                        pct = min(downloaded / total, 1.0)
+                        progress.progress(pct, text=f"Downloading... {downloaded/1e6:.0f}MB / {total/1e6:.0f}MB")
+        
+        progress.progress(1.0, text="✅ Database ready!")
+        st.success("Database downloaded successfully! Refreshing...")
+        st.rerun()
+    except Exception as e:
+        st.warning(f"⚠️ Could not download database: {e}. Running in demo mode with limited data.")
+
+_download_db()
 
 st.set_page_config(
     page_title="Nigeria Health AI Refinery",
@@ -933,23 +966,20 @@ elif page == "💡 Insights":
     # Model readiness summary
     st.subheader("🧠 Model readiness by disease")
     readiness_df = query("""
-    SELECT fs.disease_category,
-           COUNT(DISTINCT fs.lga_id)                                         AS lgas_covered,
-           COUNT(*)                                                           AS total_rows,
-           ROUND(AVG(fs.reporting_weight), 2)                                AS avg_quality,
-           ROUND(100.0 * SUM(CASE WHEN fs.incidence_lag_4w IS NOT NULL
-                                  THEN 1 ELSE 0 END) / COUNT(*), 1)          AS lag4w_pct,
-           ROUND(100.0 * SUM(CASE WHEN fs.rainfall_mm IS NOT NULL
-                                  THEN 1 ELSE 0 END) / COUNT(*), 1)          AS climate_pct,
-           ROUND(100.0 * SUM(CASE WHEN se.poverty_headcount_pct IS NOT NULL
-                                  THEN 1 ELSE 0 END) / COUNT(*), 1)          AS ses_pct
-    FROM feature_store fs
-    LEFT JOIN socioeconomic se
-        ON se.lga_id = fs.lga_id
-        AND se.year  = fs.epi_year
-    GROUP BY fs.disease_category
-    ORDER BY avg_quality DESC
-""")
+        SELECT disease_category,
+               COUNT(DISTINCT lga_id)                                         AS lgas_covered,
+               COUNT(*)                                                        AS total_rows,
+               ROUND(AVG(reporting_weight), 2)                                AS avg_quality,
+               ROUND(100.0 * SUM(CASE WHEN incidence_lag_4w IS NOT NULL
+                                      THEN 1 ELSE 0 END) / COUNT(*), 1)       AS lag4w_pct,
+               ROUND(100.0 * SUM(CASE WHEN rainfall_mm IS NOT NULL
+                                      THEN 1 ELSE 0 END) / COUNT(*), 1)       AS climate_pct,
+               ROUND(100.0 * SUM(CASE WHEN poverty_headcount_pct IS NOT NULL
+                                      THEN 1 ELSE 0 END) / COUNT(*), 1)       AS ses_pct
+        FROM feature_store
+        GROUP BY disease_category
+        ORDER BY avg_quality DESC
+    """)
     if not readiness_df.empty:
         readiness_df["overall_score"] = (
             readiness_df["avg_quality"] * 40
@@ -987,7 +1017,12 @@ elif page == "💡 Insights":
         st.dataframe(readiness_df, use_container_width=True, hide_index=True)
 
     st.divider()
-    
+    st.info(
+        "**Next step — Phase 3:** Train your AI models directly on the `feature_store` table. "
+        "Use `reporting_weight` as sample weights in scikit-learn or PyTorch. "
+        "Evaluate only on African benchmarks (APHRC). Never use WHO global baselines.",
+        icon="🧠",
+    )
 
 # ════════════════════════════════════════════════════════════════════════════
 # PAGE 7 — PREDICTIONS (RLRF Model)
