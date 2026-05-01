@@ -29,74 +29,41 @@ import streamlit as st
 # ── Config ──────────────────────────────────────────────────────────────────
 DB_PATH = os.getenv("DB_PATH", "./nigeria.db")
 
-# ── Auto-download database from Google Drive if not present ─────────────────
-def _download_db():
-    """Download nigeria.db from Google Drive on first run (Streamlit Cloud)."""
-    db = Path(DB_PATH)
-    # Check file size — if >50MB it's the real database, skip download
-    if db.exists() and db.stat().st_size > 50_000_000:
-        return  # Already downloaded
-    # Also skip if we just downloaded this session
-    if st.session_state.get("_db_downloaded"):
+# ── Auto-build database on first run (Streamlit Cloud) ──────────────────────
+def _ensure_db():
+    """Build nigeria.db from scratch on first run using synthetic data."""
+    from pathlib import Path as _P
+    db = _P(DB_PATH)
+    # Already ready?
+    if db.exists() and db.stat().st_size > 1_000_000:
+        try:
+            import sqlite3 as _sq
+            c = _sq.connect(DB_PATH)
+            n = c.execute("SELECT COUNT(*) FROM lga").fetchone()[0]
+            c.close()
+            if n > 100:
+                return  # DB is good
+        except Exception:
+            pass
+
+    if st.session_state.get("_db_building"):
+        st.info("⏳ Building database... please wait")
+        st.stop()
         return
 
-    GDRIVE_FILE_ID = "1b1UJ058XGy80W-iH0tCFmSFxX6LPexLb"
+    st.session_state["_db_building"] = True
+    with st.spinner("⏳ First run: building Nigeria health database (~2 minutes)..."):
+        try:
+            import startup
+            startup.run_setup()
+            st.session_state["_db_building"] = False
+            st.success("✅ Database ready! Loading dashboard...")
+            import time; time.sleep(1)
+            st.rerun()
+        except Exception as e:
+            st.session_state["_db_building"] = False
+            st.warning(f"⚠️ Database setup issue: {e}. Some data may be unavailable.")
 
-    # Use gdown which handles Google Drive redirects and confirmation pages
-    try:
-        import gdown
-        st.info("⏳ First run: downloading database (~160MB). This takes ~2 minutes...")
-        progress = st.progress(0, text="Connecting to database server...")
-        gdown.download(id=GDRIVE_FILE_ID, output=DB_PATH, quiet=True, fuzzy=True)
-        progress.progress(1.0, text="✅ Database ready!")
-        st.success("✅ Database downloaded! Loading dashboard...")
-        st.session_state["_db_downloaded"] = True
-        import time; time.sleep(2)
-        st.rerun()
-        return
-    except Exception:
-        pass
-
-    # Fallback: direct requests with confirmation token
-    try:
-        import requests
-        st.info("⏳ First run: downloading database (~160MB). This takes ~2 minutes...")
-        progress = st.progress(0, text="Connecting to database server...")
-
-        # Step 1: get confirmation token for large file
-        session = requests.Session()
-        resp = session.get(
-            f"https://drive.google.com/uc?export=download&id={GDRIVE_FILE_ID}",
-            stream=True, timeout=60
-        )
-        token = None
-        for k, v in resp.cookies.items():
-            if k.startswith("download_warning"):
-                token = v
-                break
-
-        url = f"https://drive.google.com/uc?export=download&id={GDRIVE_FILE_ID}&confirm={token or 't'}"
-        with session.get(url, stream=True, timeout=600) as r:
-            r.raise_for_status()
-            total = int(r.headers.get("content-length", 160_000_000))
-            downloaded = 0
-            with open(DB_PATH, "wb") as f:
-                for chunk in r.iter_content(chunk_size=2*1024*1024):
-                    if chunk:
-                        f.write(chunk)
-                        downloaded += len(chunk)
-                        pct = min(downloaded / total, 1.0)
-                        progress.progress(pct, text=f"Downloading... {downloaded/1e6:.0f} / {total/1e6:.0f} MB")
-
-        progress.progress(1.0, text="✅ Database ready!")
-        st.success("✅ Database downloaded! Loading dashboard...")
-        st.session_state["_db_downloaded"] = True
-        import time; time.sleep(2)
-        st.rerun()
-    except Exception as e:
-        st.warning(f"⚠️ Could not download database: {e}. Running in demo mode.")
-
-_download_db()
 
 st.set_page_config(
     page_title="Nigeria Health AI Refinery",
