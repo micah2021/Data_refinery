@@ -52,3 +52,7 @@ logs/
 # Jupyter
 .ipynb_checkpoints/
 *.ipynb
+
+nigerai.db
+models/*.pkl
+models/shap_plots/
