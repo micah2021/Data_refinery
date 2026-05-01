@@ -33,8 +33,12 @@ DB_PATH = os.getenv("DB_PATH", "./nigeria.db")
 def _download_db():
     """Download nigeria.db from Google Drive on first run (Streamlit Cloud)."""
     db = Path(DB_PATH)
-    if db.exists() and db.stat().st_size > 10_000_000:
-        return  # Already downloaded (>10MB means real DB)
+    # Check file size — if >50MB it's the real database, skip download
+    if db.exists() and db.stat().st_size > 50_000_000:
+        return  # Already downloaded
+    # Also skip if we just downloaded this session
+    if st.session_state.get("_db_downloaded"):
+        return
 
     GDRIVE_FILE_ID = "1b1UJ058XGy80W-iH0tCFmSFxX6LPexLb"
 
@@ -46,6 +50,7 @@ def _download_db():
         gdown.download(id=GDRIVE_FILE_ID, output=DB_PATH, quiet=True, fuzzy=True)
         progress.progress(1.0, text="✅ Database ready!")
         st.success("✅ Database downloaded! Loading dashboard...")
+        st.session_state["_db_downloaded"] = True
         import time; time.sleep(2)
         st.rerun()
         return
@@ -85,6 +90,7 @@ def _download_db():
 
         progress.progress(1.0, text="✅ Database ready!")
         st.success("✅ Database downloaded! Loading dashboard...")
+        st.session_state["_db_downloaded"] = True
         import time; time.sleep(2)
         st.rerun()
     except Exception as e:
