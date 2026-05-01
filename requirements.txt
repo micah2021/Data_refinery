@@ -13,3 +13,4 @@ gtts>=2.5.0
 shap>=0.44.0
 scipy>=1.11.0
 statsmodels>=0.14.0
+gdown>=4.7.0

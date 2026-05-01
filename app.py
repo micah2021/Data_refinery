@@ -35,32 +35,60 @@ def _download_db():
     db = Path(DB_PATH)
     if db.exists() and db.stat().st_size > 10_000_000:
         return  # Already downloaded (>10MB means real DB)
-    
+
     GDRIVE_FILE_ID = "1b1UJ058XGy80W-iH0tCFmSFxX6LPexLb"
-    url = f"https://drive.google.com/uc?export=download&id={GDRIVE_FILE_ID}&confirm=t"
-    
+
+    # Use gdown which handles Google Drive redirects and confirmation pages
+    try:
+        import gdown
+        st.info("⏳ First run: downloading database (~160MB). This takes ~2 minutes...")
+        progress = st.progress(0, text="Connecting to database server...")
+        gdown.download(id=GDRIVE_FILE_ID, output=DB_PATH, quiet=True, fuzzy=True)
+        progress.progress(1.0, text="✅ Database ready!")
+        st.success("✅ Database downloaded! Loading dashboard...")
+        import time; time.sleep(2)
+        st.rerun()
+        return
+    except Exception:
+        pass
+
+    # Fallback: direct requests with confirmation token
     try:
         import requests
         st.info("⏳ First run: downloading database (~160MB). This takes ~2 minutes...")
         progress = st.progress(0, text="Connecting to database server...")
-        
-        with requests.get(url, stream=True, timeout=300) as r:
+
+        # Step 1: get confirmation token for large file
+        session = requests.Session()
+        resp = session.get(
+            f"https://drive.google.com/uc?export=download&id={GDRIVE_FILE_ID}",
+            stream=True, timeout=60
+        )
+        token = None
+        for k, v in resp.cookies.items():
+            if k.startswith("download_warning"):
+                token = v
+                break
+
+        url = f"https://drive.google.com/uc?export=download&id={GDRIVE_FILE_ID}&confirm={token or 't'}"
+        with session.get(url, stream=True, timeout=600) as r:
             r.raise_for_status()
             total = int(r.headers.get("content-length", 160_000_000))
             downloaded = 0
             with open(DB_PATH, "wb") as f:
-                for chunk in r.iter_content(chunk_size=1024*1024):
+                for chunk in r.iter_content(chunk_size=2*1024*1024):
                     if chunk:
                         f.write(chunk)
                         downloaded += len(chunk)
                         pct = min(downloaded / total, 1.0)
-                        progress.progress(pct, text=f"Downloading... {downloaded/1e6:.0f}MB / {total/1e6:.0f}MB")
-        
+                        progress.progress(pct, text=f"Downloading... {downloaded/1e6:.0f} / {total/1e6:.0f} MB")
+
         progress.progress(1.0, text="✅ Database ready!")
-        st.success("Database downloaded successfully! Refreshing...")
+        st.success("✅ Database downloaded! Loading dashboard...")
+        import time; time.sleep(2)
         st.rerun()
     except Exception as e:
-        st.warning(f"⚠️ Could not download database: {e}. Running in demo mode with limited data.")
+        st.warning(f"⚠️ Could not download database: {e}. Running in demo mode.")
 
 _download_db()
 
