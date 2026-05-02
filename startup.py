@@ -151,7 +151,7 @@ def _seed_alerts_direct(lgas):
     conn = sqlite3.connect(DB_PATH)
     conn.executemany("""
         INSERT OR IGNORE INTO surveillance_alert
-            (lga_id, alert_date, epi_week, epi_year, disease_category,
+            (lga_id, alert_date, epi_week, epi_year, disease,
              alert_level, suspected_cases, confirmed_cases, deaths,
              ncdc_ref, data_quality_score, source)
         VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
