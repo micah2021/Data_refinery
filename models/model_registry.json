@@ -1,7 +1,7 @@
 {
   "project": "Nigeria Health AI \u2014 RLRF Outbreak Prediction",
   "version": "2.0.0",
-  "created_at": "2026-04-30T05:03:10.724914",
+  "created_at": "2026-05-02T12:44:28.927090",
   "novel_contribution": "RLRF: Reinforcement Learning-guided Random Forest. N-step SARSA (n=1,2,4,8) value estimates used as state-aware temporal features in a zone-stratified RF+GB ensemble. First application of RL-feature augmentation to sub-national outbreak prediction in Africa.",
   "architecture": {
     "layer_1": "feature_store \u2014 multi-source state observations",
@@ -20,9 +20,9 @@
     "forecast_horizon": "4 weeks ahead"
   },
   "aggregate_performance": {
-    "mean_r2": 0.6034,
-    "mean_mae_per_10k": 0.4192,
-    "mean_sarsa_r2_gain": 0.1906
+    "mean_r2": 0.6037,
+    "mean_mae_per_10k": 0.419,
+    "mean_sarsa_r2_gain": 0.1908
   },
   "diseases": [
     {
@@ -32,45 +32,45 @@
       "test_rows": 11550,
       "features_total": 50,
       "features_sarsa": 7,
-      "mae": 0.4127,
-      "rmse": 0.5817,
-      "r2": 0.6116,
-      "mape_pct": 84428.39,
-      "outbreak_accuracy": 0.8542,
+      "mae": 0.4129,
+      "rmse": 0.582,
+      "r2": 0.6112,
+      "mape_pct": 84710.71,
+      "outbreak_accuracy": 0.8532,
       "uncertainty_mean": 0.3606,
       "mae_no_sarsa": 0.5256,
       "r2_no_sarsa": 0.41,
-      "sarsa_improvement_r2": 0.2016,
-      "sarsa_improvement_mae": 0.1129,
+      "sarsa_improvement_r2": 0.2012,
+      "sarsa_improvement_mae": 0.1127,
       "zone_metrics": {
         "NC": {
-          "r2": 0.6704,
-          "mae": 0.25,
+          "r2": 0.6701,
+          "mae": 0.2503,
           "n": 1815
         },
         "NE": {
-          "r2": 0.5823,
-          "mae": 0.4995,
+          "r2": 0.5816,
+          "mae": 0.4996,
           "n": 1665
         },
         "NW": {
-          "r2": 0.5759,
-          "mae": 0.4234,
+          "r2": 0.5755,
+          "mae": 0.4236,
           "n": 2760
         },
         "SE": {
-          "r2": 0.5643,
+          "r2": 0.5647,
           "mae": 0.5738,
           "n": 1425
         },
         "SS": {
-          "r2": 0.5364,
-          "mae": 0.4346,
+          "r2": 0.5353,
+          "mae": 0.4348,
           "n": 1845
         },
         "SW": {
-          "r2": 0.5458,
-          "mae": 0.3397,
+          "r2": 0.5453,
+          "mae": 0.3399,
           "n": 2040
         }
       }
@@ -82,44 +82,44 @@
       "test_rows": 11550,
       "features_total": 50,
       "features_sarsa": 7,
-      "mae": 0.4222,
-      "rmse": 0.588,
-      "r2": 0.6062,
-      "mape_pct": 104522.98,
-      "outbreak_accuracy": 0.8551,
+      "mae": 0.4225,
+      "rmse": 0.5884,
+      "r2": 0.6058,
+      "mape_pct": 104584.03,
+      "outbreak_accuracy": 0.8553,
       "uncertainty_mean": 0.366,
       "mae_no_sarsa": 0.5297,
       "r2_no_sarsa": 0.4124,
-      "sarsa_improvement_r2": 0.1938,
-      "sarsa_improvement_mae": 0.1075,
+      "sarsa_improvement_r2": 0.1933,
+      "sarsa_improvement_mae": 0.1072,
       "zone_metrics": {
         "NC": {
-          "r2": 0.6332,
-          "mae": 0.2502,
+          "r2": 0.6343,
+          "mae": 0.2498,
           "n": 1815
         },
         "NE": {
-          "r2": 0.5707,
-          "mae": 0.5159,
+          "r2": 0.5695,
+          "mae": 0.5168,
           "n": 1665
         },
         "NW": {
-          "r2": 0.5878,
-          "mae": 0.4431,
+          "r2": 0.5872,
+          "mae": 0.4435,
           "n": 2760
         },
         "SE": {
-          "r2": 0.556,
-          "mae": 0.5642,
+          "r2": 0.5551,
+          "mae": 0.5651,
           "n": 1425
         },
         "SS": {
-          "r2": 0.5322,
-          "mae": 0.4522,
+          "r2": 0.5319,
+          "mae": 0.4521,
           "n": 1845
         },
         "SW": {
-          "r2": 0.5474,
+          "r2": 0.5473,
           "mae": 0.3443,
           "n": 2040
         }
@@ -132,45 +132,45 @@
       "test_rows": 11550,
       "features_total": 50,
       "features_sarsa": 7,
-      "mae": 0.4194,
-      "rmse": 0.5916,
-      "r2": 0.596,
-      "mape_pct": 113606.9,
-      "outbreak_accuracy": 0.8485,
+      "mae": 0.4198,
+      "rmse": 0.5921,
+      "r2": 0.5952,
+      "mape_pct": 113672.43,
+      "outbreak_accuracy": 0.8491,
       "uncertainty_mean": 0.3584,
       "mae_no_sarsa": 0.5298,
       "r2_no_sarsa": 0.4015,
-      "sarsa_improvement_r2": 0.1944,
-      "sarsa_improvement_mae": 0.1104,
+      "sarsa_improvement_r2": 0.1937,
+      "sarsa_improvement_mae": 0.11,
       "zone_metrics": {
         "NC": {
-          "r2": 0.707,
-          "mae": 0.2412,
+          "r2": 0.7065,
+          "mae": 0.2413,
           "n": 1815
         },
         "NE": {
-          "r2": 0.5501,
-          "mae": 0.5066,
+          "r2": 0.5495,
+          "mae": 0.5072,
           "n": 1665
         },
         "NW": {
-          "r2": 0.5729,
-          "mae": 0.4364,
+          "r2": 0.5722,
+          "mae": 0.4368,
           "n": 2760
         },
         "SE": {
-          "r2": 0.4991,
-          "mae": 0.5764,
+          "r2": 0.4983,
+          "mae": 0.5772,
           "n": 1425
         },
         "SS": {
-          "r2": 0.5346,
-          "mae": 0.452,
+          "r2": 0.534,
+          "mae": 0.4524,
           "n": 1845
         },
         "SW": {
-          "r2": 0.5756,
-          "mae": 0.3443,
+          "r2": 0.5737,
+          "mae": 0.345,
           "n": 2040
         }
       }
@@ -182,45 +182,45 @@
       "test_rows": 11550,
       "features_total": 50,
       "features_sarsa": 7,
-      "mae": 0.4241,
-      "rmse": 0.6,
-      "r2": 0.5938,
-      "mape_pct": 94098.78,
-      "outbreak_accuracy": 0.8503,
+      "mae": 0.4242,
+      "rmse": 0.5998,
+      "r2": 0.5941,
+      "mape_pct": 94217.47,
+      "outbreak_accuracy": 0.8509,
       "uncertainty_mean": 0.3593,
       "mae_no_sarsa": 0.5314,
       "r2_no_sarsa": 0.4076,
-      "sarsa_improvement_r2": 0.1862,
+      "sarsa_improvement_r2": 0.1865,
       "sarsa_improvement_mae": 0.1072,
       "zone_metrics": {
         "NC": {
-          "r2": 0.6535,
-          "mae": 0.2538,
+          "r2": 0.653,
+          "mae": 0.2541,
           "n": 1815
         },
         "NE": {
-          "r2": 0.5681,
-          "mae": 0.5133,
+          "r2": 0.5685,
+          "mae": 0.513,
           "n": 1665
         },
         "NW": {
-          "r2": 0.5767,
-          "mae": 0.4448,
+          "r2": 0.5769,
+          "mae": 0.445,
           "n": 2760
         },
         "SE": {
-          "r2": 0.4823,
-          "mae": 0.5926,
+          "r2": 0.4826,
+          "mae": 0.5929,
           "n": 1425
         },
         "SS": {
-          "r2": 0.5564,
-          "mae": 0.4359,
+          "r2": 0.5574,
+          "mae": 0.4355,
           "n": 1845
         },
         "SW": {
-          "r2": 0.5303,
-          "mae": 0.3465,
+          "r2": 0.5307,
+          "mae": 0.3466,
           "n": 2040
         }
       }
@@ -232,45 +232,45 @@
       "test_rows": 11550,
       "features_total": 50,
       "features_sarsa": 7,
-      "mae": 0.4173,
-      "rmse": 0.5965,
-      "r2": 0.6017,
-      "mape_pct": 103714.71,
-      "outbreak_accuracy": 0.8538,
+      "mae": 0.4169,
+      "rmse": 0.596,
+      "r2": 0.6024,
+      "mape_pct": 103114.62,
+      "outbreak_accuracy": 0.8552,
       "uncertainty_mean": 0.3575,
       "mae_no_sarsa": 0.5248,
       "r2_no_sarsa": 0.4192,
-      "sarsa_improvement_r2": 0.1825,
-      "sarsa_improvement_mae": 0.1075,
+      "sarsa_improvement_r2": 0.1833,
+      "sarsa_improvement_mae": 0.1079,
       "zone_metrics": {
         "NC": {
-          "r2": 0.6713,
-          "mae": 0.2454,
+          "r2": 0.6722,
+          "mae": 0.2451,
           "n": 1815
         },
         "NE": {
-          "r2": 0.5552,
-          "mae": 0.5124,
+          "r2": 0.5576,
+          "mae": 0.5113,
           "n": 1665
         },
         "NW": {
-          "r2": 0.5803,
-          "mae": 0.4379,
+          "r2": 0.5807,
+          "mae": 0.4375,
           "n": 2760
         },
         "SE": {
-          "r2": 0.5214,
-          "mae": 0.5614,
+          "r2": 0.5203,
+          "mae": 0.5615,
           "n": 1425
         },
         "SS": {
-          "r2": 0.5382,
-          "mae": 0.4449,
+          "r2": 0.5398,
+          "mae": 0.4445,
           "n": 1845
         },
         "SW": {
-          "r2": 0.5716,
-          "mae": 0.3391,
+          "r2": 0.5723,
+          "mae": 0.339,
           "n": 2040
         }
       }
@@ -282,45 +282,45 @@
       "test_rows": 11550,
       "features_total": 50,
       "features_sarsa": 7,
-      "mae": 0.4141,
-      "rmse": 0.5818,
-      "r2": 0.6212,
-      "mape_pct": 75469.38,
-      "outbreak_accuracy": 0.8622,
+      "mae": 0.4134,
+      "rmse": 0.5811,
+      "r2": 0.622,
+      "mape_pct": 75246.18,
+      "outbreak_accuracy": 0.8619,
       "uncertainty_mean": 0.3615,
       "mae_no_sarsa": 0.5244,
       "r2_no_sarsa": 0.4283,
-      "sarsa_improvement_r2": 0.1929,
-      "sarsa_improvement_mae": 0.1103,
+      "sarsa_improvement_r2": 0.1937,
+      "sarsa_improvement_mae": 0.111,
       "zone_metrics": {
         "NC": {
-          "r2": 0.6677,
-          "mae": 0.2413,
+          "r2": 0.6696,
+          "mae": 0.2406,
           "n": 1815
         },
         "NE": {
-          "r2": 0.6149,
-          "mae": 0.4985,
+          "r2": 0.6171,
+          "mae": 0.4972,
           "n": 1665
         },
         "NW": {
-          "r2": 0.6003,
-          "mae": 0.4356,
+          "r2": 0.6013,
+          "mae": 0.4349,
           "n": 2760
         },
         "SE": {
-          "r2": 0.5262,
-          "mae": 0.5677,
+          "r2": 0.5246,
+          "mae": 0.5679,
           "n": 1425
         },
         "SS": {
-          "r2": 0.5617,
-          "mae": 0.4361,
+          "r2": 0.5632,
+          "mae": 0.4353,
           "n": 1845
         },
         "SW": {
-          "r2": 0.5791,
-          "mae": 0.3427,
+          "r2": 0.5802,
+          "mae": 0.3421,
           "n": 2040
         }
       }
@@ -332,45 +332,45 @@
       "test_rows": 11550,
       "features_total": 50,
       "features_sarsa": 7,
-      "mae": 0.425,
-      "rmse": 0.596,
-      "r2": 0.5941,
-      "mape_pct": 102042.52,
-      "outbreak_accuracy": 0.852,
+      "mae": 0.4244,
+      "rmse": 0.5953,
+      "r2": 0.5951,
+      "mape_pct": 102175.25,
+      "outbreak_accuracy": 0.8521,
       "uncertainty_mean": 0.3592,
       "mae_no_sarsa": 0.5293,
       "r2_no_sarsa": 0.4108,
-      "sarsa_improvement_r2": 0.1833,
-      "sarsa_improvement_mae": 0.1043,
+      "sarsa_improvement_r2": 0.1843,
+      "sarsa_improvement_mae": 0.1049,
       "zone_metrics": {
         "NC": {
-          "r2": 0.6537,
-          "mae": 0.2368,
+          "r2": 0.6557,
+          "mae": 0.2364,
           "n": 1815
         },
         "NE": {
-          "r2": 0.5272,
-          "mae": 0.5202,
+          "r2": 0.5273,
+          "mae": 0.52,
           "n": 1665
         },
         "NW": {
-          "r2": 0.5939,
-          "mae": 0.4347,
+          "r2": 0.5955,
+          "mae": 0.4338,
           "n": 2760
         },
         "SE": {
-          "r2": 0.4948,
-          "mae": 0.5877,
+          "r2": 0.4958,
+          "mae": 0.5866,
           "n": 1425
         },
         "SS": {
-          "r2": 0.5416,
-          "mae": 0.464,
+          "r2": 0.5432,
+          "mae": 0.463,
           "n": 1845
         },
         "SW": {
-          "r2": 0.5628,
-          "mae": 0.3526,
+          "r2": 0.5635,
+          "mae": 0.3524,
           "n": 2040
         }
       }
@@ -382,45 +382,45 @@
       "test_rows": 11550,
       "features_total": 50,
       "features_sarsa": 7,
-      "mae": 0.4188,
-      "rmse": 0.5886,
-      "r2": 0.603,
-      "mape_pct": 99660.52,
-      "outbreak_accuracy": 0.8546,
+      "mae": 0.4182,
+      "rmse": 0.5881,
+      "r2": 0.6036,
+      "mape_pct": 99524.99,
+      "outbreak_accuracy": 0.8547,
       "uncertainty_mean": 0.3582,
       "mae_no_sarsa": 0.5265,
       "r2_no_sarsa": 0.4132,
-      "sarsa_improvement_r2": 0.1898,
-      "sarsa_improvement_mae": 0.1078,
+      "sarsa_improvement_r2": 0.1904,
+      "sarsa_improvement_mae": 0.1084,
       "zone_metrics": {
         "NC": {
-          "r2": 0.6697,
-          "mae": 0.2496,
+          "r2": 0.6694,
+          "mae": 0.2495,
           "n": 1815
         },
         "NE": {
-          "r2": 0.5594,
-          "mae": 0.5097,
+          "r2": 0.5593,
+          "mae": 0.5094,
           "n": 1665
         },
         "NW": {
-          "r2": 0.5857,
-          "mae": 0.4417,
+          "r2": 0.586,
+          "mae": 0.4412,
           "n": 2760
         },
         "SE": {
-          "r2": 0.5426,
-          "mae": 0.5669,
+          "r2": 0.5445,
+          "mae": 0.5659,
           "n": 1425
         },
         "SS": {
-          "r2": 0.5314,
-          "mae": 0.4456,
+          "r2": 0.5322,
+          "mae": 0.4448,
           "n": 1845
         },
         "SW": {
-          "r2": 0.531,
-          "mae": 0.3362,
+          "r2": 0.5321,
+          "mae": 0.3354,
           "n": 2040
         }
       }
