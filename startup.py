@@ -14,16 +14,29 @@ DB_PATH = os.getenv("DB_PATH", "./nigeria.db")
 random.seed(42)
 
 
+REQUIRED_VERSION = "v2"
+
 def db_is_ready() -> bool:
+    """Check DB is ready AND matches required version."""
     db = Path(DB_PATH)
     if not db.exists() or db.stat().st_size < 500_000:
         return False
+    # Check version file
+    version_file = Path(".db_version")
+    built_version = Path(".db_built_version")
+    if version_file.exists() and built_version.exists():
+        req = version_file.read_text().strip()
+        built = built_version.read_text().strip()
+        if req != built:
+            print(f"DB version mismatch: required={req}, built={built} — rebuilding")
+            return False
     try:
         conn = sqlite3.connect(DB_PATH)
         lga_count = conn.execute("SELECT COUNT(*) FROM lga").fetchone()[0]
         disease_count = conn.execute("SELECT COUNT(*) FROM disease_record").fetchone()[0]
+        pred_count = conn.execute("SELECT COUNT(*) FROM model_predictions").fetchone()[0]
         conn.close()
-        return lga_count > 100 and disease_count > 1000
+        return lga_count > 100 and disease_count > 1000 and pred_count > 100
     except Exception:
         return False
 
@@ -137,6 +150,16 @@ def run_setup():
         except Exception:
             pass
     conn.close()
+    # Write version stamp
+    try:
+        version_file = Path(".db_version")
+        built_version = Path(".db_built_version")
+        if version_file.exists():
+            built_version.write_text(version_file.read_text().strip())
+        else:
+            built_version.write_text("v2")
+    except Exception:
+        pass
     print("Setup complete!")
 
 
