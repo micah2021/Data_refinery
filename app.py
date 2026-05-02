@@ -51,126 +51,62 @@ DISEASE_COLOURS = {
 
 # ── Auto-build database on first run (Streamlit Cloud) ──────────────────────
 def _build_db_if_needed():
-    """Synchronously build nigeria.db before any queries run."""
+    """Build nigeria.db if not present. Only runs ONCE."""
     db = Path(DB_PATH)
-    
-    # Version check — force rebuild if version changed
-    version_file = Path(".db_version")
-    built_version = Path(".db_built_version")
-    version_ok = True
-    if version_file.exists() and built_version.exists():
-        if version_file.read_text().strip() != built_version.read_text().strip():
-            version_ok = False
 
-    # Check if DB exists, has data, and predictions are populated
-    if db.exists() and db.stat().st_size > 500_000 and version_ok:
+    # Simple check: does DB exist with LGA data?
+    def _is_ready():
+        if not db.exists() or db.stat().st_size < 500_000:
+            return False
         try:
             c = sqlite3.connect(DB_PATH)
             n = c.execute("SELECT COUNT(*) FROM lga").fetchone()[0]
-            p = c.execute("SELECT COUNT(*) FROM model_predictions").fetchone()[0]
+            d = c.execute("SELECT COUNT(*) FROM disease_record").fetchone()[0]
             c.close()
-            if n > 100 and p > 100:
-                return True  # DB is fully ready
+            return n > 100 and d > 1000
         except Exception:
-            pass
+            return False
 
-    # Need to build — show progress UI
+    if _is_ready():
+        return True  # Already built — just run the app
+
+    # Need to build
     placeholder = st.empty()
     with placeholder.container():
-        st.warning("⏳ **First run detected** — building Nigeria health database from synthetic data. This takes about 2 minutes...")
-        progress = st.progress(0, text="Initialising...")
+        st.warning("⏳ **First run** — building database (~2 min)...")
+        progress = st.progress(0, text="Starting...")
 
     try:
-        import sys, importlib
+        import sys, importlib, os as _os
         sys.path.insert(0, ".")
 
         # Step 1: Schema
-        progress.progress(10, text="Creating database schema...")
-        import setup_db
-        importlib.reload(setup_db)
-
-        import sqlite3 as _sq, os as _os
-        if _os.path.exists(DB_PATH):
-            _os.remove(DB_PATH)
+        progress.progress(10, text="Creating schema...")
+        if db.exists(): _os.remove(str(db))
         with open("nigeria_db_schema.sql", "r", encoding="utf-8") as f:
             schema_sql = f.read()
-        _conn = _sq.connect(DB_PATH)
-        _conn.executescript(schema_sql)
-        _conn.commit()
-        _conn.close()
+        import sqlite3 as _sq
+        _c = _sq.connect(DB_PATH)
+        _c.executescript(schema_sql)
+        _c.commit()
+        _c.close()
 
-        # Step 2: Seed LGAs
-        progress.progress(25, text="Seeding 770 Nigerian LGAs...")
-        import seed_nigeria
-        importlib.reload(seed_nigeria)
-        seed_nigeria.seed_lga_table(DB_PATH)
+        # Step 2-6: Seed via startup.py
+        progress.progress(20, text="Seeding LGAs...")
+        import startup
+        importlib.reload(startup)
+        startup.run_setup()
 
-        # Step 3: Load LGAs for CSV generation
-        _conn = _sq.connect(DB_PATH)
-        _conn.row_factory = _sq.Row
-        lgas = [dict(r) for r in _conn.execute(
-            "SELECT lga_id, lga_name, state, zone, lga_type FROM lga"
-        ).fetchall()]
-        _conn.close()
-
-        # Step 4: Generate CSVs
-        progress.progress(40, text="Generating climate and alert data...")
-        import os as _os2
-        _os2.makedirs("./data", exist_ok=True)
-        seed_nigeria.generate_ncdc_csv("./data/ncdc_alerts.csv", lgas)
-        seed_nigeria.generate_nimet_csv("./data/nimet_climate.csv", lgas)
-
-        # Step 5: Seed disease records
-        progress.progress(55, text="Generating disease records...")
-        import random
-        random.seed(42)
-        sample = random.sample(lgas, min(150, len(lgas)))
-        seed_nigeria.seed_disease_records(DB_PATH, sample)
-
-        # Step 6: Run data collector
-        progress.progress(70, text="Running data collector...")
-        try:
-            import data_collector
-            importlib.reload(data_collector)
-            data_collector.main()
-        except Exception as e:
-            st.warning(f"Data collector partial: {e}")
-
-        # Step 7: Build feature store
-        progress.progress(85, text="Building feature store...")
-        try:
-            import build_feature_store
-            importlib.reload(build_feature_store)
-            build_feature_store.main()
-        except Exception as e:
-            st.warning(f"Feature store partial: {e}")
-
-        progress.progress(90, text="Training RLRF models (this takes ~3 minutes)...")
-        try:
-            import train_model as _tm, importlib as _il
-            _il.reload(_tm)
-            Path("./models").mkdir(exist_ok=True)
-            DISEASES = ["malaria","cholera","typhoid","tuberculosis",
-                        "meningitis","lassa_fever","yellow_fever","diarrhoeal"]
-            for _d in DISEASES:
-                if not (Path("./models") / f"{_d}_rlrf.pkl").exists():
-                    try:
-                        _tm.train(_d)
-                    except Exception as _e:
-                        pass  # Skip failed models gracefully
-        except Exception as _e:
-            pass  # Models optional — dashboard still works
-
-        progress.progress(100, text="✅ All done!")
-        placeholder.success("✅ Database built and models trained! Loading dashboard...")
-        import time; time.sleep(2)
+        progress.progress(95, text="Almost done...")
+        placeholder.success("✅ Database ready!")
+        import time; time.sleep(1)
         st.rerun()
-        return True
 
     except Exception as e:
-        placeholder.error(f"❌ Database build failed: {e}")
+        placeholder.error(f"❌ Setup failed: {e}")
         st.stop()
-        return False
+
+    return True
 
 _build_db_if_needed()
 

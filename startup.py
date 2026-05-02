@@ -14,29 +14,16 @@ DB_PATH = os.getenv("DB_PATH", "./nigeria.db")
 random.seed(42)
 
 
-REQUIRED_VERSION = "v2"
-
 def db_is_ready() -> bool:
-    """Check DB is ready AND matches required version."""
     db = Path(DB_PATH)
     if not db.exists() or db.stat().st_size < 500_000:
         return False
-    # Check version file
-    version_file = Path(".db_version")
-    built_version = Path(".db_built_version")
-    if version_file.exists() and built_version.exists():
-        req = version_file.read_text().strip()
-        built = built_version.read_text().strip()
-        if req != built:
-            print(f"DB version mismatch: required={req}, built={built} — rebuilding")
-            return False
     try:
         conn = sqlite3.connect(DB_PATH)
-        lga_count = conn.execute("SELECT COUNT(*) FROM lga").fetchone()[0]
-        disease_count = conn.execute("SELECT COUNT(*) FROM disease_record").fetchone()[0]
-        pred_count = conn.execute("SELECT COUNT(*) FROM model_predictions").fetchone()[0]
+        n = conn.execute("SELECT COUNT(*) FROM lga").fetchone()[0]
+        d = conn.execute("SELECT COUNT(*) FROM disease_record").fetchone()[0]
         conn.close()
-        return lga_count > 100 and disease_count > 1000 and pred_count > 100
+        return n > 100 and d > 1000
     except Exception:
         return False
 
@@ -114,30 +101,6 @@ def run_setup():
     except Exception as e:
         print(f"  fix_socioeconomic partial: {e}")
         _seed_socioeconomic_direct(lgas)  # fallback
-
-    # Step 8: Train models + export predictions
-    print("[8/8] Training RLRF models and exporting predictions...")
-    try:
-        Path("./models").mkdir(exist_ok=True)
-        import train_model, importlib
-        importlib.reload(train_model)
-        DISEASES = ["malaria","cholera","typhoid","tuberculosis",
-                    "meningitis","lassa_fever","yellow_fever","diarrhoeal"]
-        for disease in DISEASES:
-            pkl = Path(f"./models/{disease}_rlrf.pkl")
-            if not pkl.exists():
-                try:
-                    train_model.train(disease)
-                    print(f"  ✓ {disease} trained")
-                except Exception as e:
-                    print(f"  ✗ {disease}: {e}")
-        # Export predictions
-        import export_predictions
-        importlib.reload(export_predictions)
-        export_predictions.main()
-        print("  ✓ Predictions exported")
-    except Exception as e:
-        print(f"  model training partial: {e}")
 
     # Summary
     conn = sqlite3.connect(DB_PATH)
