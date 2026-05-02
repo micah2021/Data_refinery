@@ -90,10 +90,47 @@ def run_setup():
         except Exception as e2:
             print(f"  feature store: {e2}")
 
+    # Step 7: Fix socioeconomic
+    print("[7/8] Populating socioeconomic data...")
+    try:
+        import fix_socioeconomic, importlib
+        importlib.reload(fix_socioeconomic)
+        fix_socioeconomic.main()
+    except SystemExit:
+        pass
+    except Exception as e:
+        print(f"  fix_socioeconomic partial: {e}")
+        _seed_socioeconomic_direct(lgas)  # fallback
+
+    # Step 8: Train models + export predictions
+    print("[8/8] Training RLRF models and exporting predictions...")
+    try:
+        Path("./models").mkdir(exist_ok=True)
+        import train_model, importlib
+        importlib.reload(train_model)
+        DISEASES = ["malaria","cholera","typhoid","tuberculosis",
+                    "meningitis","lassa_fever","yellow_fever","diarrhoeal"]
+        for disease in DISEASES:
+            pkl = Path(f"./models/{disease}_rlrf.pkl")
+            if not pkl.exists():
+                try:
+                    train_model.train(disease)
+                    print(f"  ✓ {disease} trained")
+                except Exception as e:
+                    print(f"  ✗ {disease}: {e}")
+        # Export predictions
+        import export_predictions
+        importlib.reload(export_predictions)
+        export_predictions.main()
+        print("  ✓ Predictions exported")
+    except Exception as e:
+        print(f"  model training partial: {e}")
+
     # Summary
     conn = sqlite3.connect(DB_PATH)
     for table in ["lga","disease_record","surveillance_alert",
-                  "climate_health","socioeconomic","feature_store"]:
+                  "climate_health","socioeconomic","feature_store",
+                  "model_predictions"]:
         try:
             n = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
             print(f"  {table}: {n:,}")
