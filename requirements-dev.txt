@@ -1,0 +1,7 @@
+pytest
+pytest-mock
+pandas
+flake8
+mypy
+PyYAML
+safety
