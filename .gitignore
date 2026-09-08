@@ -28,6 +28,7 @@ build/
 
 # Environment
 .env
+!.env.example
 venv/
 env/
 .venv/

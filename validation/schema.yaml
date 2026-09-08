@@ -1,0 +1,34 @@
+# Expected schema for lightweight CI validation.
+# Keep this focused on core production tables and essential columns.
+database_env_var: DB_PATH
+schema_file: validation/schema.yaml
+expected_tables:
+  lga:
+    - lga_id
+    - lga_code
+    - lga_name
+    - state
+    - zone
+  facility:
+    - facility_id
+    - lga_id
+    - facility_name
+  disease_record:
+    - record_id
+    - lga_id
+    - report_date
+    - disease_name
+    - case_count
+  surveillance_alert:
+    - alert_id
+    - lga_id
+    - alert_date
+    - disease
+    - alert_level
+  feature_store:
+    - feature_id
+    - lga_id
+    - epi_year
+    - epi_week
+# Optional non-empty table checks. Add tables as data availability guarantees improve.
+non_empty_tables: []
