@@ -43,9 +43,8 @@ def main() -> int:
     root = Path.cwd()
     findings = scan_repo(root)
     if findings:
-        print("Potential secrets found:")
-        for finding in findings:
-            print(f" - {finding}")
+        # Do not print possible secret values or related file details to logs.
+        print(f"Potential secrets found: {len(findings)} possible match(es).")
         return 1
 
     print("No obvious secrets detected.")
